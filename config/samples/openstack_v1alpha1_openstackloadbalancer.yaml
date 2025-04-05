@@ -1,0 +1,12 @@
+apiVersion: openstack.jacero.io/v1alpha1
+kind: OpenStackLoadBalancer
+metadata:
+  name: metallb-integration
+  namespace: default
+spec:
+  className: "metallb"  # Should match the loadbalancer class or annotation on your Services
+  applicationCredentialSecretRef:
+    name: openstack-credentials
+    namespace: default
+  createFloatingIP: true
+  floatingIPNetworkID: "d374fe7a-0ee0-4d2e-982f-e0e50562359e"  # Only required if createFloatingIP is true

@@ -1,0 +1,77 @@
+version: '3'
+
+includes:
+  utils:
+    taskfile: utils.yaml
+    internal: true
+  kind:
+    taskfile: kind.yaml
+    internal: true
+  operator:
+    taskfile: operator.yaml
+    internal: true
+
+tasks:
+  install:
+    desc: Install CRDs into the K8s cluster
+    cmds:
+      - mkdir -p {{.ROOT_DIR}}/config/crd/bases
+      - '{{.CONTROLLER_GEN_CMD}} rbac:roleName=manager-role crd webhook paths="{{.ROOT_DIR}}/..." output:crd:artifacts:config={{.ROOT_DIR}}/config/crd/bases'
+      - '{{.KUBECTL_CMD}} apply -f {{.ROOT_DIR}}/config/crd/bases'
+    deps:
+      - operator:generate
+      - operator:manifests
+
+  uninstall:
+    desc: Uninstall CRDs from the K8s cluster
+    cmds:
+      - '{{.KUBECTL_CMD}} delete -f {{.ROOT_DIR}}/config/crd/bases || true'
+    deps:
+      - utils:kubectl
+
+  run:
+    desc: Run controller locally and output logs to file
+    cmds:
+      - |
+        go run ./cmd/main.go \
+          --metrics-bind-address=:8081 \
+          --health-probe-bind-address=:8082 \
+          --leader-elect=false > {{.ROOT_DIR}}/output.log 2>&1
+    env:
+      KUBECONFIG: '{{.KUBECONFIG}}'
+
+  setup:
+    desc: Set up the complete development environment
+    cmds:
+      - task: kind:create-cluster
+      - task: kind:install-components
+      - echo "Development environment setup complete"
+
+  start:
+    desc: Start the development cluster
+    cmds:
+      - task: kind:start-cluster
+      
+  stop:
+    desc: Stop the development cluster
+    cmds:
+      - task: kind:stop-cluster
+      
+  cleanup:
+    desc: Clean up the development environment
+    cmds:
+      - task: kind:cleanup-cluster
+
+  apply-samples:
+    desc: Apply sample resources
+    cmds:
+      - '{{.KUBECTL_CMD}} apply -k {{.ROOT_DIR}}/config/samples'
+    deps:
+      - utils:kubectl
+
+  delete-samples:
+    desc: Delete sample resources
+    cmds:
+      - '{{.KUBECTL_CMD}} delete -k {{.ROOT_DIR}}/config/samples || true'
+    deps:
+      - utils:kubectl

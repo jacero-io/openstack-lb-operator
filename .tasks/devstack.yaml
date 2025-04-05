@@ -1,0 +1,760 @@
+version: '3'
+
+includes:
+  utils:
+    taskfile: utils.yaml
+    internal: true
+
+vars:
+  DOCKER_COMPOSE_FILE: '{{.ROOT_DIR}}/hack/openstack/docker-compose.yaml'
+  DOCKER_COMPOSE_DIR: '{{.ROOT_DIR}}/hack/openstack'
+  ENV_FILE: '{{.ROOT_DIR}}/hack/openstack/.env'
+  DOCKER_COMPOSE_CMD: 'docker compose -f {{.DOCKER_COMPOSE_FILE}}'
+  CREDENTIALS_DIR: '{{.ROOT_DIR}}/hack/credentials'
+  SECRET_NAME: openstack-credentials
+  
+tasks:
+  ensure-dirs:
+    internal: true
+    desc: Ensure the OpenStack directories exist
+    cmds:
+      - mkdir -p {{.DOCKER_COMPOSE_DIR}}
+    status:
+      - test -d {{.DOCKER_COMPOSE_DIR}}
+    silent: true
+
+  init:
+    silent: true
+    desc: Initialize the DevStack environment
+    deps: [ensure-dirs]
+    cmds:
+      - |
+        if [ ! -f {{.DOCKER_COMPOSE_FILE}} ]; then
+          echo "Creating docker-compose.yaml file for DevStack..."
+          cat > {{.DOCKER_COMPOSE_FILE}} << 'EOF'
+        services:
+          controller:
+            container_name: controller
+            hostname: controller
+            image: bobuhiro11/containerized-devstack-controller
+            privileged: true
+            tty: true
+            cgroup: host
+            volumes:
+              - '/sys/fs/cgroup:/sys/fs/cgroup:rw'
+            devices:
+              - '/dev/net/tun:/dev/net/tun'
+            sysctls:
+              net.ipv6.conf.all.disable_ipv6: 0
+              net.ipv6.conf.default.disable_ipv6: 0
+            environment:
+              - HOST_IP=172.28.0.2
+            networks:
+              management_network:
+                ipv4_address: 172.28.0.2
+          
+          compute-1:
+            container_name: compute-1
+            hostname: compute-1
+            image: bobuhiro11/containerized-devstack-compute-1
+            privileged: true
+            tty: true
+            cgroup: host
+            volumes:
+              - '/sys/fs/cgroup:/sys/fs/cgroup:rw'
+            devices:
+              - '/dev/net/tun:/dev/net/tun'
+            sysctls:
+              net.ipv6.conf.all.disable_ipv6: 0
+              net.ipv6.conf.default.disable_ipv6: 0
+            environment:
+              - HOST_IP=172.28.0.3
+            networks:
+              management_network:
+                ipv4_address: 172.28.0.3
+          
+          compute-2:
+            container_name: compute-2
+            hostname: compute-2
+            image: bobuhiro11/containerized-devstack-compute-2
+            privileged: true
+            tty: true
+            cgroup: host
+            volumes:
+              - '/sys/fs/cgroup:/sys/fs/cgroup:rw'
+            devices:
+              - '/dev/net/tun:/dev/net/tun'
+            sysctls:
+              net.ipv6.conf.all.disable_ipv6: 0
+              net.ipv6.conf.default.disable_ipv6: 0
+            environment:
+              - HOST_IP=172.28.0.4
+            networks:
+              management_network:
+                ipv4_address: 172.28.0.4
+
+        networks:
+          management_network:
+            driver: bridge
+            ipam:
+              driver: default
+              config:
+                - subnet: 172.28.0.0/24
+        EOF
+          echo "Created docker-compose.yaml file at {{.DOCKER_COMPOSE_FILE}}"
+        else
+          echo "docker-compose.yaml file already exists at {{.DOCKER_COMPOSE_FILE}}"
+        fi
+        
+        # Create clouds.yaml for OpenStack API access
+        if [ ! -f {{.DOCKER_COMPOSE_DIR}}/clouds.yaml ]; then
+          cat > {{.DOCKER_COMPOSE_DIR}}/clouds.yaml << 'EOF'
+        clouds:
+          devstack:
+            auth:
+              auth_url: http://172.28.0.2:5000/v3
+              username: admin
+              password: devstack
+              project_name: admin
+              user_domain_name: Default
+              project_domain_name: Default
+            region_name: RegionOne
+            interface: public
+            identity_api_version: 3
+        EOF
+          echo "Created clouds.yaml file at {{.DOCKER_COMPOSE_DIR}}/clouds.yaml"
+        fi
+        
+        # Create test script
+        if [ ! -f {{.DOCKER_COMPOSE_DIR}}/test-openstack.sh ]; then
+          cat > {{.DOCKER_COMPOSE_DIR}}/test-openstack.sh << 'EOF'
+        #!/bin/bash
+        # Source the admin credentials
+        {{.DOCKER_COMPOSE_CMD}} exec controller cat /opt/stack/devstack/openrc admin > $(dirname $0)/admin-openrc.sh
+        source $(dirname $0)/admin-openrc.sh
+
+        # Test if the OpenStack services are running
+        echo "Testing OpenStack services..."
+        {{.DOCKER_COMPOSE_CMD}} exec controller openstack service list
+
+        # Test network functionality
+        echo -e "\nTesting network connectivity..."
+        {{.DOCKER_COMPOSE_CMD}} exec controller openstack network list
+
+        # Check for external network
+        echo -e "\nChecking for external network..."
+        {{.DOCKER_COMPOSE_CMD}} exec controller openstack network list --external
+
+        # Test compute functionality
+        echo -e "\nChecking compute services..."
+        {{.DOCKER_COMPOSE_CMD}} exec controller openstack compute service list
+
+        # Show endpoint list
+        echo -e "\nListing API endpoints..."
+        {{.DOCKER_COMPOSE_CMD}} exec controller openstack endpoint list
+        EOF
+          chmod +x {{.DOCKER_COMPOSE_DIR}}/test-openstack.sh
+          echo "Created test-openstack.sh file at {{.DOCKER_COMPOSE_DIR}}/test-openstack.sh"
+        fi
+      - echo "DevStack environment initialized. Use 'task devstack:start' to launch the environment."
+
+  start:
+    silent: true
+    desc: Start the DevStack environment
+    deps: [init]
+    cmds:
+      - |
+        echo "Starting DevStack environment..."
+        cd {{.DOCKER_COMPOSE_DIR}} && {{.DOCKER_COMPOSE_CMD}} up -d
+        echo "DevStack is starting. This may take a few minutes for all services to initialize."
+        echo "Check status with 'task devstack:status'"
+
+  stop:
+    silent: true
+    desc: Stop the DevStack environment
+    cmds:
+      - |
+        if [ -f {{.DOCKER_COMPOSE_FILE}} ]; then
+          echo "Stopping DevStack environment..."
+          cd {{.DOCKER_COMPOSE_DIR}} && {{.DOCKER_COMPOSE_CMD}} stop
+          echo "DevStack environment stopped"
+        else
+          echo "docker-compose.yaml not found. Run 'task devstack:init' first."
+          exit 1
+        fi
+
+  cleanup:
+    silent: true
+    desc: Clean up the DevStack environment and remove all files
+    cmds:
+      - |
+        echo "This will stop all containers and remove the DevStack environment files."
+        echo "Are you sure you want to continue? (y/N)"
+        read -r confirm
+        if [[ "$confirm" =~ ^[Yy]$ ]]; then
+          if [ -f {{.DOCKER_COMPOSE_FILE}} ]; then
+            echo "Stopping and removing DevStack environment..."
+            cd {{.DOCKER_COMPOSE_DIR}} && {{.DOCKER_COMPOSE_CMD}} down -v
+          fi
+          
+          echo "Removing DevStack configuration files..."
+          rm -rf {{.DOCKER_COMPOSE_DIR}}
+          echo "DevStack environment cleaned up"
+        else
+          echo "Cleanup aborted"
+        fi
+
+  # New tasks for network setup
+  ensure-metallb-network:
+    silent: true
+    desc: Ensure network and subnet for MetalLB exist in DevStack
+    cmds:
+      - |
+        if [ ! -f {{.DOCKER_COMPOSE_FILE}} ]; then
+          echo "DevStack environment not initialized. Run 'task devstack:init' first."
+          exit 1
+        fi
+        
+        # Check if DevStack is running
+        if ! docker ps --filter "name=controller" --format "{{.Names}}" | grep -q "controller"; then
+          echo "DevStack controller is not running. Start it with 'task devstack:start'"
+          exit 1
+        fi
+        
+        # Check if the network already exists
+        EXISTING_NET_ID=$(docker exec controller openstack network show -f value -c id metallb-network 2>/dev/null || echo "")
+        
+        if [ -n "$EXISTING_NET_ID" ]; then
+          echo "Using existing MetalLB network: $EXISTING_NET_ID"
+          METALLB_NET_ID=$EXISTING_NET_ID
+          
+          # Check if the subnet exists
+          EXISTING_SUBNET_ID=$(docker exec controller openstack subnet show -f value -c id metallb-subnet 2>/dev/null || echo "")
+          
+          if [ -n "$EXISTING_SUBNET_ID" ]; then
+            echo "Using existing MetalLB subnet: $EXISTING_SUBNET_ID"
+            METALLB_SUBNET_ID=$EXISTING_SUBNET_ID
+          else
+            echo "Creating subnet in existing network..."
+            METALLB_SUBNET_ID=$(docker exec controller openstack subnet create \
+              --network metallb-network \
+              --subnet-range {{.METALLB_SUBNET_CIDR}} \
+              --description "Subnet for MetalLB IP allocation" \
+              --dns-nameserver 8.8.8.8 \
+              metallb-subnet -f value -c id)
+            
+            echo "Created subnet: $METALLB_SUBNET_ID"
+          fi
+        else
+          echo "Creating MetalLB network in OpenStack..."
+          
+          # Create a network for MetalLB
+          METALLB_NET_ID=$(docker exec controller openstack network create \
+            --description "Network for MetalLB integration" \
+            metallb-network -f value -c id)
+          
+          echo "Created network: $METALLB_NET_ID"
+          
+          # Create a subnet within the network
+          METALLB_SUBNET_ID=$(docker exec controller openstack subnet create \
+            --network metallb-network \
+            --subnet-range {{.METALLB_SUBNET_CIDR}} \
+            --description "Subnet for MetalLB IP allocation" \
+            --dns-nameserver 8.8.8.8 \
+            metallb-subnet -f value -c id)
+          
+          echo "Created subnet: $METALLB_SUBNET_ID"
+        fi
+        
+        # Save network and subnet IDs to a file for later use
+        echo "METALLB_NET_ID=$METALLB_NET_ID" > {{.DOCKER_COMPOSE_DIR}}/metallb-resources.env
+        echo "METALLB_SUBNET_ID=$METALLB_SUBNET_ID" >> {{.DOCKER_COMPOSE_DIR}}/metallb-resources.env
+        
+        echo "MetalLB network and subnet successfully ensured"
+
+  ensure-router:
+    silent: true
+    desc: Ensure router exists and connects external network and MetalLB network
+    deps: [ensure-metallb-network]
+    cmds:
+      - |
+        # Load network IDs if available
+        if [ -f {{.DOCKER_COMPOSE_DIR}}/metallb-resources.env ]; then
+          source {{.DOCKER_COMPOSE_DIR}}/metallb-resources.env
+        else
+          echo "MetalLB network resources not found. Run 'task devstack:ensure-metallb-network' first."
+          exit 1
+        fi
+        
+        # Get external network ID
+        EXTERNAL_NET_ID=$(docker exec controller openstack network list --external -f value -c ID)
+        if [ -z "$EXTERNAL_NET_ID" ]; then
+          echo "No external network found. Creating one..."
+          EXTERNAL_NET_ID=$(docker exec controller openstack network create \
+            --external --provider-network-type flat \
+            --provider-physical-network public public -f value -c id)
+          
+          # Check if public subnet exists
+          PUBLIC_SUBNET_EXISTS=$(docker exec controller openstack subnet list --network public -f value -c ID 2>/dev/null || echo "")
+          if [ -z "$PUBLIC_SUBNET_EXISTS" ]; then
+            echo "Creating public subnet..."
+            docker exec controller openstack subnet create \
+              --network public \
+              --subnet-range 172.24.5.0/24 \
+              --no-dhcp --gateway 172.24.5.1 \
+              public-subnet
+          fi
+        fi
+        
+        echo "Using external network: $EXTERNAL_NET_ID"
+        
+        # Check if router exists
+        EXISTING_ROUTER=$(docker exec controller openstack router show -f value -c id metallb-router 2>/dev/null || echo "")
+        
+        if [ -n "$EXISTING_ROUTER" ]; then
+          echo "Using existing router: $EXISTING_ROUTER"
+          ROUTER_ID=$EXISTING_ROUTER
+          
+          # Check if external gateway is already set
+          CURRENT_GATEWAY=$(docker exec controller openstack router show metallb-router -f json | jq -r '.external_gateway_info.network_id // ""')
+          if [ "$CURRENT_GATEWAY" != "$EXTERNAL_NET_ID" ]; then
+            echo "Setting external gateway on router..."
+            docker exec controller openstack router set \
+              --external-gateway $EXTERNAL_NET_ID metallb-router
+          else
+            echo "External gateway already configured correctly"
+          fi
+          
+          # Check if subnet is already connected to router
+          INTERFACE_EXISTS=$(docker exec controller openstack router show metallb-router -f json | \
+            jq -r '.interfaces_info[]? | select(.subnet_id=="'$METALLB_SUBNET_ID'") | .subnet_id' 2>/dev/null || echo "")
+          
+          if [ -z "$INTERFACE_EXISTS" ]; then
+            echo "Connecting MetalLB subnet to router..."
+            docker exec controller openstack router add subnet \
+              metallb-router $METALLB_SUBNET_ID
+          else
+            echo "MetalLB subnet already connected to router"
+          fi
+        else
+          echo "Creating router..."
+          ROUTER_ID=$(docker exec controller openstack router create \
+            --description "Router for MetalLB integration" \
+            metallb-router -f value -c id)
+          
+          echo "Created router: $ROUTER_ID"
+          
+          # Connect router to external network (set gateway)
+          docker exec controller openstack router set \
+            --external-gateway $EXTERNAL_NET_ID metallb-router
+          
+          # Connect router to MetalLB subnet
+          docker exec controller openstack router add subnet \
+            metallb-router $METALLB_SUBNET_ID
+        fi
+        
+        # Save router ID
+        echo "ROUTER_ID=$ROUTER_ID" >> {{.DOCKER_COMPOSE_DIR}}/metallb-resources.env
+        echo "EXTERNAL_NET_ID=$EXTERNAL_NET_ID" >> {{.DOCKER_COMPOSE_DIR}}/metallb-resources.env
+        
+        echo "Router successfully ensured and connections verified"
+
+  configure-metallb:
+    silent: true
+    desc: Configure MetalLB to use the DevStack subnet
+    deps: [utils:kubectl,ensure-router]
+    cmds:
+      - |
+        # Load network IDs if available
+        if [ -f {{.DOCKER_COMPOSE_DIR}}/metallb-resources.env ]; then
+          source {{.DOCKER_COMPOSE_DIR}}/metallb-resources.env
+        else
+          echo "MetalLB network resources not found. Run 'task devstack:ensure-router' first."
+          exit 1
+        fi
+        
+        # Check if MetalLB is installed
+        if ! {{.KUBECTL_CMD}} get namespace metallb-system &>/dev/null; then
+          echo "MetalLB namespace not found. MetalLB may not be installed."
+          echo "Install MetalLB with 'task kind:install-components'"
+          exit 1
+        fi
+        
+        echo "Configuring MetalLB with DevStack subnet: {{.METALLB_SUBNET_CIDR}}"
+        
+        # Create the IPAddressPool and L2Advertisement resources
+        cat <<EOF | {{.KUBECTL_CMD}} apply -f -
+        apiVersion: metallb.io/v1beta1
+        kind: IPAddressPool
+        metadata:
+          name: devstack-pool
+          namespace: metallb-system
+        spec:
+          addresses:
+          - {{.METALLB_SUBNET_RANGE}}
+          autoAssign: true
+          avoidBuggyIPs: true
+        ---
+        apiVersion: metallb.io/v1beta1
+        kind: L2Advertisement
+        metadata:
+          name: devstack-l2
+          namespace: metallb-system
+        spec:
+          ipAddressPools:
+          - devstack-pool
+        EOF
+        
+        echo "MetalLB configured to use IP range {{.METALLB_SUBNET_RANGE}} from DevStack subnet"
+
+  setup-metallb-integration:
+    desc: Set up complete MetalLB integration with DevStack
+    cmds:
+      - task: configure-metallb
+      - echo "MetalLB integration with DevStack completed successfully"
+
+  down:
+    desc: Stop and remove the DevStack environment containers
+    cmds:
+      - |
+        if [ -f {{.DOCKER_COMPOSE_FILE}} ]; then
+          echo "Stopping and removing DevStack environment..."
+          cd {{.DOCKER_COMPOSE_DIR}} && {{.DOCKER_COMPOSE_CMD}} down
+          echo "DevStack environment removed"
+        else
+          echo "docker-compose.yaml not found. Run 'task devstack:init' first."
+          exit 1
+        fi
+
+  status:
+    silent: true
+    desc: Check the status of the DevStack environment
+    cmds:
+      - |
+        if [ -f {{.DOCKER_COMPOSE_FILE}} ]; then
+          echo "DevStack container status:"
+          cd {{.DOCKER_COMPOSE_DIR}} && {{.DOCKER_COMPOSE_CMD}} ps
+          
+          # Check if the controller is running
+          if docker ps --filter "name=controller" --format "{{.Names}}" | grep -q "controller"; then
+            echo -e "\nController is running. Checking OpenStack service status..."
+            docker exec controller openstack service list 2>/dev/null || echo "OpenStack services not ready yet. Wait a few more minutes."
+          else
+            echo "Controller is not running. Start the environment with 'task devstack:start'"
+          fi
+        else
+          echo "docker-compose.yaml not found. Run 'task devstack:init' first."
+          exit 1
+        fi
+
+  logs:
+    desc: View logs from the DevStack environment
+    cmds:
+      - |
+        if [ -f {{.DOCKER_COMPOSE_FILE}} ]; then
+          echo "Viewing DevStack logs..."
+          cd {{.DOCKER_COMPOSE_DIR}} && {{.DOCKER_COMPOSE_CMD}} logs {{.CLI_ARGS}}
+        else
+          echo "docker-compose.yaml not found. Run 'task devstack:init' first."
+          exit 1
+        fi
+
+  test:
+    desc: Test the DevStack environment
+    silent: true
+    cmds:
+      - echo "Listing OpenStack services..."
+      - docker exec -it controller openstack service list
+
+      - echo -e "\nListing networks.."
+      - docker exec -it controller openstack network list
+
+      - echo -e "\nListing subnets.."
+      - docker exec -it controller openstack subnet list
+
+      - echo -e "\nListing routers.."
+      - docker exec -it controller openstack router list
+
+      - echo -e "\nListing ports.."
+      - docker exec -it controller openstack port list
+
+      - echo -e "\nListing compute services..."
+      - docker exec -it controller openstack compute service list
+
+      - echo -e "\nChecking for floating IPs..."
+      - docker exec -it controller openstack floating ip list || echo "Floating IP feature may not be enabled"
+
+  exec:
+    silent: true
+    desc: Execute a command in the controller container
+    cmds:
+      - |
+        if [ -z "{{.CLI_ARGS}}" ]; then
+          echo "Please provide a command to execute, e.g., 'task devstack:exec -- openstack service list'"
+          exit 1
+        fi
+        
+        if [ -f {{.DOCKER_COMPOSE_FILE}} ]; then
+          echo "Executing command in controller container..."
+          docker exec -it controller {{.CLI_ARGS}}
+        else
+          echo "docker-compose.yaml not found. Run 'task devstack:init' first."
+          exit 1
+        fi
+
+  setup:
+    desc: Set up the DevStack environment
+    cmds:
+      - task: init
+      - task: start
+      - sleep 15
+      - task: status
+      - task: test
+      - task: setup-metallb-integration
+      - task: test-lb
+      - task: test
+
+  test-lb:
+    desc: Test the OpenStack Load Balancer integration
+    cmds:
+      - task: get-external-network
+      - task: ensure-credentials
+      - echo "Apply the credentials secret to Kubernetes..."
+      - kubectl apply -f {{.ROOT_DIR}}/hack/openstack/openstack-credentials-secret.yaml || echo "Failed to apply credentials secret. Is Kubernetes available?"
+      - echo "Now you can deploy the OpenStackLoadBalancer resource with the correct credentials and external network ID"
+
+  get-external-network:
+    desc: Get the external network ID for floating IPs
+    cmds:
+      - |
+        if [ -f {{.DOCKER_COMPOSE_FILE}} ]; then
+          echo "Getting external network ID..."
+          EXTERNAL_NETWORK_ID=$(docker exec controller openstack network list --external -f value -c ID 2>/dev/null)
+          
+          if [ -z "$EXTERNAL_NETWORK_ID" ]; then
+            echo "No external network found. This is required for floating IPs."
+            echo "Checking for any networks that might be usable..."
+            docker exec controller openstack network list
+            
+            echo -e "\nYou may need to create an external network:"
+            echo "task devstack:exec -- openstack network create --external public"
+          else
+            echo "External network ID: $EXTERNAL_NETWORK_ID"
+            echo "Update your OpenStackLoadBalancer resource with this ID in the floatingIPNetworkID field"
+            
+            # Show more details about the network
+            echo -e "\nNetwork details:"
+            docker exec controller openstack network show $EXTERNAL_NETWORK_ID
+          fi
+        else
+          echo "docker-compose.yaml not found. Run 'task devstack:init' first."
+          exit 1
+        fi
+
+# === OpenStack Credentials Management Tasks ===
+  
+  credentials-dir:
+    internal: true
+    desc: Ensure the credentials directory exists
+    cmds:
+      - mkdir -p {{.CREDENTIALS_DIR}}
+    status:
+      - test -d {{.CREDENTIALS_DIR}}
+    silent: true
+
+  ensure-credentials:
+    desc: Ensure OpenStack credentials and Secret exist
+    deps: [credentials-dir]
+    cmds:
+      - |
+        # Set defaults if not provided
+        SECRET_NAME="{{.SECRET_NAME | default "openstack-credentials"}}"
+        SECRET_NAMESPACE="{{.SECRET_NAMESPACE | default "default"}}"
+
+        # Check if credentials need to be created
+        CREATE_CREDENTIALS=true
+        CREDENTIALS_AVAILABLE=false
+
+        # Check if the secret already exists
+        if kubectl get secret $SECRET_NAME -n $SECRET_NAMESPACE &>/dev/null; then
+          echo "Secret $SECRET_NAME exists in namespace $SECRET_NAMESPACE - No changes needed"
+          CREATE_CREDENTIALS=false
+          CREDENTIALS_AVAILABLE=true
+        fi
+
+        # Create credentials if needed
+        if [ "$CREATE_CREDENTIALS" = "true" ]; then
+          echo "Creating OpenStack credentials secret: $SECRET_NAME in namespace: $SECRET_NAMESPACE"
+
+          # Check if we should use DevStack
+          if [ "{{.USE_DEVSTACK | default "true"}}" = "true" ]; then
+            # Use DevStack to create credentials
+            if ! docker ps --filter "name=controller" --format "{{.Names}}" | grep -q "controller"; then
+              echo "DevStack controller is not running. Start it with 'task devstack:start'"
+              exit 1
+            fi
+            
+            # Create the credentials
+            echo "Creating application credentials in OpenStack..."
+            docker exec controller openstack application credential create \
+              --description "Created for OpenStack LB Operator" $SECRET_NAME -f json > {{.CREDENTIALS_DIR}}/app-credential-$SECRET_NAME.json
+            
+            if [ $? -ne 0 ]; then
+              echo "Failed to create OpenStack application credentials"
+              exit 1
+            fi
+            
+            # Extract values for Kubernetes secret
+            APP_CRED_ID=$(cat {{.CREDENTIALS_DIR}}/app-credential-$SECRET_NAME.json | jq -r '.id')
+            APP_CRED_SECRET=$(cat {{.CREDENTIALS_DIR}}/app-credential-$SECRET_NAME.json | jq -r '.secret')
+            AUTH_URL=$(docker exec controller bash -c 'echo $OS_AUTH_URL')
+            REGION_NAME=$(docker exec controller bash -c 'echo $OS_REGION_NAME')
+            
+            CREDENTIALS_AVAILABLE=true
+          else
+            # Manual entry
+            if [ -z "{{.AUTH_URL}}" ] || [ -z "{{.APP_CRED_ID}}" ] || [ -z "{{.APP_CRED_SECRET}}" ]; then
+              echo "Manual credential mode requires AUTH_URL, APP_CRED_ID, and APP_CRED_SECRET parameters"
+              exit 1
+            fi
+            
+            AUTH_URL="{{.AUTH_URL}}"
+            APP_CRED_ID="{{.APP_CRED_ID}}"
+            APP_CRED_SECRET="{{.APP_CRED_SECRET}}"
+            REGION_NAME="{{.REGION_NAME | default "RegionOne"}}"
+            
+            CREDENTIALS_AVAILABLE=true
+          fi
+        fi
+
+        # Create or update Secret if credentials are available
+        if [ "$CREDENTIALS_AVAILABLE" = "true" ] && [ "$CREATE_CREDENTIALS" = "true" ]; then
+          # Create Kubernetes secret yaml
+          cat > {{.CREDENTIALS_DIR}}/$SECRET_NAME-secret.yaml << EOF
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: $SECRET_NAME
+          namespace: $SECRET_NAMESPACE
+        type: Opaque
+        stringData:
+          OS_AUTH_URL: "${AUTH_URL}"
+          OS_REGION_NAME: "${REGION_NAME}"
+          OS_APPLICATION_CREDENTIAL_ID: "${APP_CRED_ID}"
+          OS_APPLICATION_CREDENTIAL_SECRET: "${APP_CRED_SECRET}"
+        EOF
+          
+          echo "Kubernetes secret manifest created at {{.CREDENTIALS_DIR}}/$SECRET_NAME-secret.yaml"
+          
+          # Apply the Secret to Kubernetes
+          kubectl apply -f {{.CREDENTIALS_DIR}}/$SECRET_NAME-secret.yaml
+          
+          echo "Secret $SECRET_NAME created/updated in namespace $SECRET_NAMESPACE"
+        fi
+
+  replace-credentials:
+    desc: Force replacement of OpenStack credentials
+    deps: [credentials-dir]
+    cmds:
+      - |
+        # Set defaults if not provided
+        SECRET_NAME="{{.SECRET_NAME | default ""}}"
+        SECRET_NAMESPACE="{{.SECRET_NAMESPACE | default .DEFAULT_LB_NAMESPACE}}"
+        
+        if [ -z "$SECRET_NAME" ]; then
+          echo "SECRET_NAME parameter is required"
+          exit 1
+        fi
+        
+        # Delete the existing secret if it exists
+        if kubectl get secret $SECRET_NAME -n $SECRET_NAMESPACE &>/dev/null; then
+          echo "Deleting existing secret $SECRET_NAME..."
+          kubectl delete secret $SECRET_NAME -n $SECRET_NAMESPACE
+        fi
+        
+        # Create new credentials with the same name
+        echo "Creating new OpenStack credentials..."
+        task dev:ensure-credentials SECRET_NAME=$SECRET_NAME SECRET_NAMESPACE=$SECRET_NAMESPACE LB_NAME={{.LB_NAME}} LB_NAMESPACE={{.LB_NAMESPACE}} USE_DEVSTACK={{.USE_DEVSTACK}} AUTH_URL={{.AUTH_URL}} APP_CRED_ID={{.APP_CRED_ID}} APP_CRED_SECRET={{.APP_CRED_SECRET}} REGION_NAME={{.REGION_NAME}}
+
+  delete-credentials:
+    desc: Delete OpenStack credentials secret and remove references from LB resources
+    cmds:
+      - |
+        SECRET_NAME="{{.SECRET_NAME | default ""}}"
+        SECRET_NAMESPACE="{{.SECRET_NAMESPACE | default .DEFAULT_SECRET_NAMESPACE}}"
+        
+        if [ -z "$SECRET_NAME" ]; then
+          echo "SECRET_NAME parameter is required"
+          exit 1
+        fi
+        
+        # Check if the secret exists
+        if ! kubectl get secret $SECRET_NAME -n $SECRET_NAMESPACE &>/dev/null; then
+          echo "Secret $SECRET_NAME not found in namespace $SECRET_NAMESPACE"
+          exit 1
+        fi
+        
+        # Find LB resources that use this secret
+        echo "Finding OpenStackLoadBalancer resources using this secret..."
+        LB_RESOURCES=$(kubectl get openstackloadbalancer --all-namespaces -o json | jq -r '.items[] | select(.spec.applicationCredentialSecretRef.name == "'$SECRET_NAME'" and .spec.applicationCredentialSecretRef.namespace == "'$SECRET_NAMESPACE'") | .metadata.namespace + "/" + .metadata.name')
+        
+        if [ -n "$LB_RESOURCES" ]; then
+          echo "⚠️  The following OpenStackLoadBalancer resources are using this secret:"
+          echo "$LB_RESOURCES"
+          
+          echo "Are you sure you want to delete the secret? This may break the LB resources. (y/N)"
+          read -r confirm
+          if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+            echo "Deletion cancelled"
+            exit 0
+          fi
+        fi
+        
+        # Delete the secret
+        kubectl delete secret $SECRET_NAME -n $SECRET_NAMESPACE
+        echo "Secret $SECRET_NAME deleted from namespace $SECRET_NAMESPACE"
+        
+        # Delete the local files if they exist
+        if [ -f "{{.CREDENTIALS_DIR}}/app-credential-$SECRET_NAME.json" ]; then
+          rm "{{.CREDENTIALS_DIR}}/app-credential-$SECRET_NAME.json"
+        fi
+        
+        if [ -f "{{.CREDENTIALS_DIR}}/$SECRET_NAME-secret.yaml" ]; then
+          rm "{{.CREDENTIALS_DIR}}/$SECRET_NAME-secret.yaml"
+        fi
+        
+        if [ -n "$LB_RESOURCES" ]; then
+          echo "⚠️  Don't forget to update the OpenStackLoadBalancer resources that were using this secret!"
+        fi
+
+  list-credentials:
+    desc: List all OpenStack credentials secrets and their usage
+    cmds:
+      - |
+        echo "OpenStack Credentials Secrets:"
+        echo "-----------------------------"
+        
+        # Get a list of all secrets
+        SECRETS=$(kubectl get secrets --all-namespaces -o json | jq -r '.items[] | select(.data["OS_APPLICATION_CREDENTIAL_ID"] != null) | .metadata.namespace + "/" + .metadata.name')
+        
+        if [ -z "$SECRETS" ]; then
+          echo "No OpenStack credential secrets found"
+          exit 0
+        fi
+        
+        # For each secret, find OpenStackLoadBalancer resources using it
+        echo -e "NAMESPACE/NAME\t\tUSED BY"
+        echo -e "-------------\t\t-------"
+        
+        for SECRET in $SECRETS; do
+          NAMESPACE=$(echo $SECRET | cut -d '/' -f 1)
+          NAME=$(echo $SECRET | cut -d '/' -f 2)
+          
+          LB_COUNT=$(kubectl get openstackloadbalancer --all-namespaces -o json | jq -r '.items[] | select(.spec.applicationCredentialSecretRef.name == "'$NAME'" and .spec.applicationCredentialSecretRef.namespace == "'$NAMESPACE'") | .metadata.name' | wc -l)
+          
+          if [ "$LB_COUNT" -gt 0 ]; then
+            echo -e "$SECRET\t\t$LB_COUNT OpenStackLoadBalancer(s)"
+          else
+            echo -e "$SECRET\t\tNot in use"
+          fi
+        done

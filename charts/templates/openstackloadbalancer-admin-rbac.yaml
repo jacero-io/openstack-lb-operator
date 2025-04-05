@@ -1,0 +1,19 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "charts.fullname" . }}-openstackloadbalancer-admin-role
+  labels:
+  {{- include "charts.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - openstack.jacero.io
+  resources:
+  - openstackloadbalancers
+  verbs:
+  - '*'
+- apiGroups:
+  - openstack.jacero.io
+  resources:
+  - openstackloadbalancers/status
+  verbs:
+  - get

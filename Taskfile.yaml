@@ -1,0 +1,179 @@
+version: '3'
+
+includes:
+  utils:
+    taskfile: ./.tasks/utils.yaml
+    internal: true
+  operator:
+    taskfile: ./.tasks/operator.yaml
+  dev:
+    taskfile: ./.tasks/dev.yaml
+  lint:
+    taskfile: ./.tasks/lint.yaml
+    internal: true
+  kind:
+    taskfile: ./.tasks/kind.yaml
+  devstack:
+    taskfile: ./.tasks/devstack.yaml
+
+vars:
+  # Project-specific variables
+  LOCALBIN: '{{.ROOT_DIR}}/bin'
+  GOBIN:
+    sh: echo "${GOBIN:-$(go env GOPATH)/bin}"
+  PLATFORMS: linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
+  
+  # MetalLB configuration
+  METALLB_SUBNET_CIDR: '172.24.6.0/24'
+  METALLB_SUBNET_RANGE: '172.24.6.10-172.24.6.250'
+
+  # Tool versions
+  GO_VERSION: '1.24'
+  ENVTEST_K8S_VERSION: 1.31.0
+  KUBERNETES_VERSION: v1.31.6
+  KUSTOMIZE_VERSION: v5.6.0
+  CONTROLLER_TOOLS_VERSION: v0.17.2
+  ENVTEST_VERSION: release-0.20
+  GOLANGCI_LINT_VERSION: v1.63.4
+  KUBECTL_VERSION: v1.32.3
+  HELMIFY_VERSION: v0.4.18
+  HELM_VERSION: v3.17.2
+  KIND_VERSION: v0.27.0
+  OPENSTACK_VERSION: 7.4.0
+
+  # Development environment
+  KUBECONFIG: '{{.ROOT_DIR}}/hack/kubeconfig'
+  DEFAULT_LB_NAMESPACE: 'default'
+  ENV: development # Set the environment to 'development' or 'production'
+  LOG_LEVEL: debug
+  IMG: '{{.IMG | default "emiljacero/openstack-lb-operator:v0.0.0-latest"}}'
+
+tasks:
+  default:
+    silent: true
+    cmds:
+      - task --list-all
+
+  # Code quality tasks
+  fmt:
+    desc: Run go fmt
+    cmds:
+      - task: lint:fmt
+
+  lint:
+    desc: Run go vet and lint
+    cmds:
+      - task: lint:vet
+      - task: lint:lint
+
+  lint-fix:
+    desc: Run go vet and lint-fix
+    cmds:
+      - task: lint:vet
+      - task: lint:lint-fix
+
+  # Utility setup tasks
+  util:setup:
+    desc: Setup utils
+    cmds:
+      - task: utils:setup
+
+  util:cleanup:
+    desc: Cleanup utils
+    cmds:
+      - task: utils:cleanup
+
+  # Build tasks
+  generate:
+    desc: Generate code and manifests
+    cmds:
+      - task: operator:generate
+      - task: operator:manifests
+
+  build:
+    desc: Build the operator binary
+    cmds:
+      - task: operator:build
+
+  # Docker tasks
+  docker-build:
+    desc: Build docker image
+    cmds:
+      - task: operator:docker-build
+        vars:
+          PUSH: '{{.PUSH | default "false"}}'
+
+  docker-push:
+    desc: Build and push docker image
+    cmds:
+      - task: operator:docker-build
+        vars:
+          PUSH: "true"
+
+  # Development environment tasks
+  run:
+    desc: Run the controller locally
+    cmds:
+      - task: utils:setup
+      - task: dev:install
+      - task: dev:run
+
+  install:
+    desc: Install CRDs into the cluster
+    cmds:
+      - task: dev:install
+
+  uninstall:
+    desc: Uninstall CRDs from the cluster
+    cmds:
+      - task: dev:uninstall
+
+  apply:
+    desc: Apply sample resources to the cluster
+    cmds:
+      - task: dev:apply-samples
+
+  delete:
+    desc: Delete sample resources from the cluster
+    cmds:
+      - task: dev:delete-samples
+
+  cleanup:
+    desc: Cleanup Dev and devstack
+    cmds:
+      - task: dev:cleanup
+      - task: devstack:cleanup
+
+  # Credentials management tasks
+  creds:
+    desc: List OpenStack credentials
+    cmds:
+      - task: dev:list-credentials
+
+  creds:ensure:
+    desc: Ensure OpenStack credentials exist (create if missing)
+    cmds:
+      - task: dev:ensure-credentials
+        vars:
+          SECRET_NAME: '{{.SECRET_NAME | default "openstack-credentials"}}'
+          SECRET_NAMESPACE: '{{.SECRET_NAMESPACE | default "default"}}'
+          LB_NAME: '{{.LB_NAME | default ""}}'
+          LB_NAMESPACE: '{{.LB_NAMESPACE | default "default"}}'
+
+  creds:replace:
+    desc: Force replacement of OpenStack credentials
+    cmds:
+      - task: dev:replace-credentials
+        vars:
+          SECRET_NAME: '{{.SECRET_NAME}}'
+          SECRET_NAMESPACE: '{{.SECRET_NAMESPACE | default "default"}}'
+          LB_NAME: '{{.LB_NAME | default ""}}'
+          LB_NAMESPACE: '{{.LB_NAMESPACE | default "default"}}'
+
+  creds:delete:
+    desc: Delete OpenStack credentials
+    cmds:
+      - task: dev:delete-credentials
+        vars:
+          SECRET_NAME: '{{.SECRET_NAME}}'
+          SECRET_NAMESPACE: '{{.SECRET_NAMESPACE | default "default"}}'

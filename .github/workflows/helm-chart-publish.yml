@@ -1,0 +1,68 @@
+name: Build & Publish Helm Charts to GHCR
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  build-and-publish-charts:
+    permissions:
+      packages: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Install dependencies
+        run: |
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+          go install sigs.k8s.io/kustomize/kustomize/v5@latest
+          go install github.com/arttor/helmify/cmd/helmify@latest
+
+      - name: Extract version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF/refs\/tags\//}" >> $GITHUB_ENV
+
+      - name: Create temporary directory
+        run: mkdir -p /tmp/charts
+
+      - name: Create output directory
+        run: mkdir -p /tmp/helm-packages
+
+      - name: Generate Helm chart
+        run: |
+          # Generate manifests first
+          make manifests
+          
+          # Generate Helm chart using the operator.yaml task
+          task operator:helm-chart
+          
+          # Copy the generated chart to the temporary directory
+          cp -r charts/ /tmp/charts/openstack-lb-operator
+
+      - name: Update Chart.yaml for openstack-lb-operator
+        run: |
+          sed -i "s/v0.0.0-latest/${{ env.VERSION }}/g" /tmp/charts/openstack-lb-operator/Chart.yaml
+          sed -i "s/v0.0.0-latest/${{ env.VERSION }}/g" /tmp/charts/openstack-lb-operator/values.yaml
+          
+          # Package the chart
+          helm package /tmp/charts/openstack-lb-operator --version ${{ env.VERSION }} --destination /tmp/helm-packages
+
+      - name: Push openstack-lb-operator chart
+        if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.actor != 'dependabot[bot]'
+        run: |
+          echo ${{ secrets.GITHUB_TOKEN }} | helm registry login -u ${{ github.actor }} ghcr.io --password-stdin
+          helm push /tmp/helm-packages/openstack-lb-operator-${{ env.VERSION }}.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
+
+      - name: Clean up temporary directory
+        run: rm -rf /tmp/charts /tmp/helm-packages
+
+      - name: Log out from GitHub Container Registry
+        run: helm registry logout ghcr.io

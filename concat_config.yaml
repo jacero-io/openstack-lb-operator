@@ -1,0 +1,18 @@
+directory: .
+output_file: "output_openstack-lb-operator.txt"
+
+exclude_patterns:
+  - "*_test.go"
+  - "zz_generated.deepcopy.go"
+
+include_patterns:
+  - "Taskfile.yaml"
+  - ".tasks/**"
+  - "Dockerfile"
+  - "api/**"
+  - "cmd/**"
+  # - "config/**"
+  - "internal/**"
+  - "pkg/**"
+  - ".github/**"
+  # - "test/**"

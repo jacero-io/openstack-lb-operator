@@ -1,0 +1,12 @@
+clouds:
+  devstack:
+    auth:
+      auth_url: http://172.28.0.2:5000/v3
+      username: admin
+      password: devstack
+      project_name: admin
+      user_domain_name: Default
+      project_domain_name: Default
+    region_name: RegionOne
+    interface: public
+    identity_api_version: 3

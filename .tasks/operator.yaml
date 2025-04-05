@@ -1,0 +1,141 @@
+version: '3'
+
+includes:
+  utils:
+    taskfile: utils.yaml
+    internal: true
+
+vars:
+  CONTAINER_TOOL: '{{.CONTAINER_TOOL | default "docker"}}'
+  BUILDER_NAME: "project-v3-builder"
+
+tasks:
+  generate:
+    desc: Generate code
+    cmds:
+      - '{{.CONTROLLER_GEN_CMD}} object:headerFile="{{.ROOT_DIR}}/hack/boilerplate.go.txt" paths="{{.ROOT_DIR}}/..."'
+    sources:
+      - '{{.ROOT_DIR}}/api/**/*.go'
+    generates:
+      - '{{.ROOT_DIR}}/api/**/zz_generated.*.go'
+    deps:
+      - utils:controller-gen
+
+  manifests:
+    desc: Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects
+    cmds:
+      - '{{.CONTROLLER_GEN_CMD}} rbac:roleName=manager-role crd webhook paths="{{.ROOT_DIR}}/..." output:crd:artifacts:config={{.ROOT_DIR}}/config/crd/bases'
+      - echo "Manifests generated successfully"
+    sources:
+      - '{{.ROOT_DIR}}/api/**/*.go'
+      - '{{.ROOT_DIR}}/internal/**/*.go'
+      - '{{.ROOT_DIR}}/config/rbac/**/*.yaml'
+    generates:
+      - '{{.ROOT_DIR}}/config/crd/bases/*.yaml'
+    deps:
+      - utils:controller-gen
+    silent: true
+
+  build:
+    desc: Build the manager binary
+    cmds:
+      - CGO_ENABLED=0 go build -o {{.ROOT_DIR}}/bin/manager {{.ROOT_DIR}}/cmd/main.go
+    sources:
+      - '{{.ROOT_DIR}}/api/**/*.go'
+      - '{{.ROOT_DIR}}/internal/**/*.go'
+      - '{{.ROOT_DIR}}/pkg/**/*.go'
+      - '{{.ROOT_DIR}}/cmd/main.go'
+    generates:
+      - '{{.ROOT_DIR}}/bin/manager'
+    deps:
+      - manifests
+      - generate
+
+  build-installer:
+    desc: Generate a consolidated YAML with CRDs and deployment manifests
+    deps:
+      - utils:ensure-dir
+      - manifests
+      - generate
+      - utils:kustomize
+    cmds:
+      - '{{.KUSTOMIZE_CMD}} build {{.ROOT_DIR}}/config/default > {{.ROOT_DIR}}/dist/install.yaml'
+      - echo "Installer generated successfully"
+    silent: true
+
+  docker-build-base:
+    internal: true
+    cmds:
+      - |
+        if ! {{.CONTAINER_TOOL}} buildx inspect {{.BUILDER_NAME}} > /dev/null 2>&1; then
+          {{.CONTAINER_TOOL}} buildx create --name {{.BUILDER_NAME}} --use
+        else
+          {{.CONTAINER_TOOL}} buildx use {{.BUILDER_NAME}}
+        fi
+      - |
+        BUILD_ARGS="--tag {{.IMG}} {{.EXTRA_BUILD_ARGS}}"
+        if [ "{{.PUSH}}" = "true" ]; then
+          echo "Building and pushing {{.BUILD_TYPE}} image..."
+          {{.CONTAINER_TOOL}} buildx build $BUILD_ARGS --push {{.ROOT_DIR}}/.
+        else
+          echo "Building {{.BUILD_TYPE}} image without pushing..."
+          {{.CONTAINER_TOOL}} buildx build $BUILD_ARGS --load {{.ROOT_DIR}}/.
+        fi
+    vars:
+      PUSH: '{{.PUSH | default "false"}}'
+      EXTRA_BUILD_ARGS: ''
+      BUILD_TYPE: 'docker'
+
+  docker-build:
+    desc: Build docker image locally
+    cmds:
+      - task: docker-build-base
+        vars:
+          BUILD_TYPE: 'amd64'
+          PUSH: '{{.PUSH | default "false"}}'
+    sources:
+      - '{{.ROOT_DIR}}/Dockerfile'
+    generates:
+      - '{{.IMG}}'
+
+  docker-build-multi:
+    desc: Build docker image for the manager with cross-platform support
+    cmds:
+      - task: docker-build-base
+        vars:
+          BUILD_TYPE: 'multi-platform'
+          EXTRA_BUILD_ARGS: '--platform={{.PLATFORMS}}'
+    vars:
+      PLATFORMS: '{{.PLATFORMS | default "linux/amd64,linux/arm64"}}'
+
+  package-crds:
+    desc: Combine all CRDs into a single file
+    deps:
+      - manifests
+    cmds:
+      - |
+        echo "---" > {{.ROOT_DIR}}/openstack-lb-operator-crds.yaml
+        for file in {{.ROOT_DIR}}/config/crd/bases/*.yaml; do
+          echo "---" >> {{.ROOT_DIR}}/openstack-lb-operator-crds.yaml
+          cat $file >> {{.ROOT_DIR}}/openstack-lb-operator-crds.yaml
+        done
+    generates:
+      - '{{.ROOT_DIR}}/openstack-lb-operator-crds.yaml'
+
+
+  helm-chart:
+    desc: Generate Helm chart from CRDs and manifests
+    deps: 
+      - manifests
+      - utils:kustomize
+      - utils:helmify
+    cmds:
+      - mkdir -p {{.ROOT_DIR}}/charts
+      - |
+        echo "Generating Helm chart from manifests..."
+        {{.KUSTOMIZE_CMD}} build {{.ROOT_DIR}}/config/default | {{.HELMIFY_CMD}} -crd-dir {{.ROOT_DIR}}/charts
+      - echo "Helm chart generated successfully at {{.ROOT_DIR}}/charts"
+    generates:
+      - '{{.ROOT_DIR}}/charts/Chart.yaml'
+      - '{{.ROOT_DIR}}/charts/values.yaml'
+      - '{{.ROOT_DIR}}/charts/templates'

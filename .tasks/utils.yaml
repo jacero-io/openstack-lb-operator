@@ -1,0 +1,231 @@
+version: '3'
+
+vars:
+  CONTROLLER_GEN_CMD: '{{.LOCALBIN}}/controller-gen-{{.CONTROLLER_TOOLS_VERSION}}'
+  SETUP_ENVTEST_CMD: '{{.LOCALBIN}}/setup-envtest-{{.ENVTEST_VERSION}}'
+  GOLANGCI_LINT_CMD: '{{.LOCALBIN}}/golangci-lint-{{.GOLANGCI_LINT_VERSION}}'
+  HELM_CMD: '{{.LOCALBIN}}/helm-{{.HELM_VERSION}}'
+  HELMIFY_CMD: '{{.LOCALBIN}}/helmify-{{.HELMIFY_VERSION}}'
+  KUSTOMIZE_CMD: '{{.LOCALBIN}}/kustomize-{{.KUSTOMIZE_VERSION}}'
+  KUBECTL_CMD: '{{.LOCALBIN}}/kubectl-{{.KUBECTL_VERSION}}'
+  KIND_CMD: '{{.LOCALBIN}}/kind-{{.KIND_VERSION}}'
+  OPENSTACK_CMD: '{{.LOCALBIN}}/openstack-cli'
+
+tasks:
+  ensure-dir:
+    internal: true
+    desc: Ensure the local bin directory exists
+    cmds:
+      - mkdir -p {{.LOCALBIN}}
+      - mkdir -p {{.ROOT_DIR}}/dist
+    status:
+      - test -d {{.LOCALBIN}}
+      - test -d {{.ROOT_DIR}}/dist
+    silent: true
+
+  kubectl:
+    desc: Download kubectl locally if necessary
+    deps: [ensure-dir]
+    cmds:
+      - |
+        PLATFORM="$(uname | tr '[:upper:]' '[:lower:]')/amd64"
+        curl -Lo {{.KUBECTL_CMD}} "https://dl.k8s.io/release/{{.KUBECTL_VERSION}}/bin/${PLATFORM}/kubectl"
+        chmod +x {{.KUBECTL_CMD}}
+        echo "Installed kubectl version {{.KUBECTL_VERSION}}"
+    sources:
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.KUBECTL_CMD}}'
+    status:
+      - test -f {{.KUBECTL_CMD}}
+    silent: true
+
+  kustomize:
+    desc: Download kustomize locally if necessary
+    deps: [ensure-dir]
+    cmds:
+      - go install sigs.k8s.io/kustomize/kustomize/v5@{{.KUSTOMIZE_VERSION}}
+      - mv {{.GOBIN}}/kustomize {{.KUSTOMIZE_CMD}}
+      - echo "Installed Kustomize version {{.KUSTOMIZE_VERSION}}"
+    sources:
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.KUSTOMIZE_CMD}}'
+    status:
+      - test -f {{.KUSTOMIZE_CMD}}
+    silent: true
+
+  kind:
+    desc: Download kind locally if necessary
+    deps: [ensure-dir]
+    cmds:
+      - |
+        PLATFORM="$(uname | tr '[:upper:]' '[:lower:]')"
+        curl -Lo {{.KIND_CMD}} "https://kind.sigs.k8s.io/dl/{{.KIND_VERSION}}/kind-${PLATFORM}-amd64"
+        chmod +x {{.KIND_CMD}}
+        echo "Installed Kind version {{.KIND_VERSION}}"
+    sources:
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.KIND_CMD}}'
+    status:
+      - test -f {{.KIND_CMD}}
+    silent: true
+
+  controller-gen:
+    desc: Download controller-gen locally if necessary
+    deps: [ensure-dir]
+    cmds:
+      - go install sigs.k8s.io/controller-tools/cmd/controller-gen@{{.CONTROLLER_TOOLS_VERSION}}
+      - mv {{.GOBIN}}/controller-gen {{.CONTROLLER_GEN_CMD}}
+      - echo "Installed Controller-gen version {{.CONTROLLER_TOOLS_VERSION}}"
+    sources:
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.CONTROLLER_GEN_CMD}}'
+    status:
+      - test -f {{.CONTROLLER_GEN_CMD}}
+    silent: true
+
+  envtest:
+    desc: Download setup-envtest locally if necessary
+    deps: [ensure-dir]
+    cmds:
+      - go install sigs.k8s.io/controller-runtime/tools/setup-envtest@{{.ENVTEST_VERSION}}
+      - mv {{.GOBIN}}/setup-envtest {{.SETUP_ENVTEST_CMD}}
+      - echo "Installed Envtest version {{.ENVTEST_K8S_VERSION}}"
+    sources:
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.SETUP_ENVTEST_CMD}}'
+    status:
+      - test -f {{.SETUP_ENVTEST_CMD}}
+    silent: true
+
+  golangci-lint:
+    desc: Download golangci-lint locally if necessary
+    deps: [ensure-dir]
+    cmds:
+      - go install github.com/golangci/golangci-lint/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
+      - mv {{.GOBIN}}/golangci-lint {{.GOLANGCI_LINT_CMD}}
+      - echo "Installed Golangci-lint version {{.GOLANGCI_LINT_VERSION}}"
+    sources:
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.GOLANGCI_LINT_CMD}}'
+    status:
+      - test -f {{.GOLANGCI_LINT_CMD}}
+    silent: true
+
+  helm:
+    desc: Download helm locally if necessary
+    deps: [ensure-dir]
+    cmds:
+      - |
+        PLATFORM="$(uname | tr '[:upper:]' '[:lower:]')"
+        HELM_TEMP_DIR=$(mktemp -d)
+        curl -fsSL https://get.helm.sh/helm-{{.HELM_VERSION}}-${PLATFORM}-amd64.tar.gz | tar -xz -C ${HELM_TEMP_DIR}
+        mv ${HELM_TEMP_DIR}/${PLATFORM}-amd64/helm {{.HELM_CMD}}
+        rm -rf ${HELM_TEMP_DIR}
+        chmod +x {{.HELM_CMD}}
+        echo "Installed Helm version {{.HELM_VERSION}}"
+    sources:
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.HELM_CMD}}'
+    status:
+      - test -f {{.HELM_CMD}}
+    silent: true
+
+  helmify:
+    desc: Download helmify locally if necessary
+    deps: [ensure-dir]
+    cmds:
+      - go install github.com/arttor/helmify/cmd/helmify@{{.HELMIFY_VERSION}}
+      - mv {{.GOBIN}}/helmify {{.HELMIFY_CMD}}
+      - echo "Installed Helmify version {{.HELMIFY_VERSION}}"
+    sources:
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.HELMIFY_CMD}}'
+    status:
+      - test -f {{.HELMIFY_CMD}}
+    silent: true
+
+  openstack:
+    desc: Install OpenStack CLI locally
+    deps: [ensure-dir]
+    cmds:
+      - |
+        # Install Python and pip if needed
+        if ! command -v pip &> /dev/null; then
+          echo "Installing pip first"
+          curl -sS https://bootstrap.pypa.io/get-pip.py | python3
+        fi
+        
+        # Create a virtual environment for OpenStack CLI
+        VENV_DIR="{{.LOCALBIN}}/openstack-venv"
+        if [ ! -d "$VENV_DIR" ]; then
+          python3 -m venv $VENV_DIR
+        fi
+        
+        # Install specific version of OpenStack client in the virtual environment
+        source $VENV_DIR/bin/activate
+        pip install --upgrade pip
+        
+        # If OPENSTACK_VERSION is specified, install that specific version
+        if [ -n "{{.OPENSTACK_VERSION}}" ]; then
+          echo "Installing python-openstackclient=={{.OPENSTACK_VERSION}}"
+          pip install python-openstackclient=={{.OPENSTACK_VERSION}}
+        else
+          echo "Installing latest python-openstackclient"
+          pip install python-openstackclient
+        fi
+        
+        # Create a wrapper script to use the OpenStack CLI from the virtual environment
+        cat > {{.OPENSTACK_CMD}} << 'EOF'
+        #!/bin/bash
+        VENV_DIR="$(dirname "$0")/openstack-venv"
+        source "$VENV_DIR/bin/activate"
+        openstack "$@"
+        EOF
+        
+        chmod +x {{.OPENSTACK_CMD}}
+        
+        # Report installed version
+        VERSION=$(source $VENV_DIR/bin/activate && openstack --version 2>&1 | cut -d' ' -f2)
+        echo "Installed OpenStack CLI version $VERSION"
+    generates:
+      - '{{.OPENSTACK_CMD}}'
+    status:
+      - test -f {{.OPENSTACK_CMD}}
+      - test -d {{.LOCALBIN}}/openstack-venv
+    silent: true
+
+  setup: 
+    desc: Setup the development environment
+    cmds:
+      - task: ensure-dir
+      - task: kubectl
+      - task: kustomize
+      - task: kind
+      - task: controller-gen
+      - task: envtest
+      - task: golangci-lint
+      - task: helm
+      - task: helmify
+
+  cleanup:
+    desc: Cleanup the development environment
+    cmds:
+      - rm -rf {{.LOCALBIN}}
+    status:
+      - test ! -d {{.LOCALBIN}}

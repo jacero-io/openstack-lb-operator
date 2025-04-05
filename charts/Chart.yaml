@@ -1,0 +1,6 @@
+apiVersion: v2
+name: openstack-lb-operator
+description: An operator that automates ports and floating IPs for in cluster loadbalancers.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
