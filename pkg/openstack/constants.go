@@ -20,7 +20,9 @@ const (
 	// TagResourceType is the type of resource this represents
 	TagResourceType = "resource-type"
 
-	// ResourceTypeValues
-	ResourceTypePort       = "service-port"
-	ResourceTypeFloatingIP = "service-floating-ip"
+	// ResourceTypePort represents a port resource
+	ResourceTypePort ResourceType = "ports"
+
+	// ResourceTypeFloatingIP represents a floating IP resource
+	ResourceTypeFloatingIP ResourceType = "floatingips"
 )

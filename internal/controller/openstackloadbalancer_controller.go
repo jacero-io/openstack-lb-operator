@@ -242,11 +242,9 @@ func (r *OpenStackLoadBalancerReconciler) processService(
 		}
 
 		if !exists {
-			// Port doesn't exist anymore, need to create a new one
-			logger.Info("Port no longer exists in OpenStack, will create a new one", "portID", portID)
-			portID = ""
-			// Update annotation to remove the old port ID
-			return true, updateServiceAnnotationWithRetry(ctx, r.Client, svc, AnnotationPortID, "")
+			// Update annotation to remove the old port ID and reuse the return value
+			err := updateServiceAnnotationWithRetry(ctx, r.Client, svc, AnnotationPortID, "")
+			return true, err
 		}
 	}
 
@@ -302,11 +300,9 @@ func (r *OpenStackLoadBalancerReconciler) processService(
 			}
 
 			if !exists {
-				// Floating IP doesn't exist anymore, need to create a new one
-				logger.Info("Floating IP no longer exists in OpenStack, will create a new one", "floatingIPID", floatingIPID)
-				floatingIPID = ""
-				// Update annotation to remove the old floating IP ID
-				return true, updateServiceAnnotationWithRetry(ctx, r.Client, svc, AnnotationFloatingIPID, "")
+				// Update annotation to remove the old floating IP ID and reuse the return value
+				err := updateServiceAnnotationWithRetry(ctx, r.Client, svc, AnnotationFloatingIPID, "")
+				return true, err
 			}
 		}
 

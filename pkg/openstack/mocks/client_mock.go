@@ -10,18 +10,35 @@ import (
 
 // MockClient is a mock implementation of the OpenStack client for testing
 type MockClient struct {
-	DetectNetworkForIPFunc    func(ctx context.Context, ipAddress string) (string, string, error)
-	CreatePortFunc            func(ctx context.Context, networkID, subnetID, portName, ipAddress, description string, serviceNamespace, serviceName string) (string, error)
-	GetPortFunc               func(ctx context.Context, portID string) (bool, error)
-	DeletePortFunc            func(ctx context.Context, portID string) error
-	GetManagedPortsFunc       func(ctx context.Context, serviceNamespace, serviceName string) ([]ports.Port, error)
-	CreateFloatingIPFunc      func(ctx context.Context, networkID, portID, description string, serviceNamespace, serviceName string) (string, string, error)
+	DetectNetworkForIPFunc func(ctx context.Context, ipAddress string) (string, string, error)
+
+	CreatePortFunc func(
+		ctx context.Context,
+		networkID, subnetID, portName, ipAddress, description string,
+		serviceNamespace, serviceName string,
+	) (string, error)
+
+	GetPortFunc         func(ctx context.Context, portID string) (bool, error)
+	DeletePortFunc      func(ctx context.Context, portID string) error
+	GetManagedPortsFunc func(ctx context.Context, serviceNamespace, serviceName string) ([]ports.Port, error)
+
+	CreateFloatingIPFunc func(
+		ctx context.Context,
+		networkID, portID, description string,
+		serviceNamespace, serviceName string,
+	) (string, string, error)
+
 	GetFloatingIPFunc         func(ctx context.Context, floatingIPID string) (bool, error)
 	DeleteFloatingIPFunc      func(ctx context.Context, floatingIPID string) error
 	GetFloatingIPByPortIDFunc func(ctx context.Context, portID string) (string, string, error)
-	GetManagedFloatingIPsFunc func(ctx context.Context, serviceNamespace, serviceName string) ([]floatingips.FloatingIP, error)
-	GetAllFloatingIPsFunc     func(ctx context.Context) ([]floatingips.FloatingIP, error)
-	GetAllPortsFunc           func(ctx context.Context) ([]ports.Port, error)
+
+	GetManagedFloatingIPsFunc func(
+		ctx context.Context,
+		serviceNamespace, serviceName string,
+	) ([]floatingips.FloatingIP, error)
+
+	GetAllFloatingIPsFunc func(ctx context.Context) ([]floatingips.FloatingIP, error)
+	GetAllPortsFunc       func(ctx context.Context) ([]ports.Port, error)
 }
 
 // Ensure MockClient implements Client interface
@@ -36,7 +53,11 @@ func (m *MockClient) DetectNetworkForIP(ctx context.Context, ipAddress string) (
 }
 
 // CreatePort implements the corresponding interface method
-func (m *MockClient) CreatePort(ctx context.Context, networkID, subnetID, portName, ipAddress, description string, serviceNamespace, serviceName string) (string, error) {
+func (m *MockClient) CreatePort(
+	ctx context.Context,
+	networkID, subnetID, portName, ipAddress, description string,
+	serviceNamespace, serviceName string,
+) (string, error) {
 	if m.CreatePortFunc != nil {
 		return m.CreatePortFunc(ctx, networkID, subnetID, portName, ipAddress, description, serviceNamespace, serviceName)
 	}
@@ -68,7 +89,11 @@ func (m *MockClient) GetManagedPorts(ctx context.Context, serviceNamespace, serv
 }
 
 // CreateFloatingIP implements the corresponding interface method
-func (m *MockClient) CreateFloatingIP(ctx context.Context, networkID, portID, description string, serviceNamespace, serviceName string) (string, string, error) {
+func (m *MockClient) CreateFloatingIP(
+	ctx context.Context,
+	networkID, portID, description string,
+	serviceNamespace, serviceName string,
+) (string, string, error) {
 	if m.CreateFloatingIPFunc != nil {
 		return m.CreateFloatingIPFunc(ctx, networkID, portID, description, serviceNamespace, serviceName)
 	}
@@ -100,7 +125,10 @@ func (m *MockClient) DeleteFloatingIP(ctx context.Context, floatingIPID string) 
 }
 
 // GetManagedFloatingIPs implements the corresponding interface method
-func (m *MockClient) GetManagedFloatingIPs(ctx context.Context, serviceNamespace, serviceName string) ([]floatingips.FloatingIP, error) {
+func (m *MockClient) GetManagedFloatingIPs(
+	ctx context.Context,
+	serviceNamespace, serviceName string,
+) ([]floatingips.FloatingIP, error) {
 	if m.GetManagedFloatingIPsFunc != nil {
 		return m.GetManagedFloatingIPsFunc(ctx, serviceNamespace, serviceName)
 	}

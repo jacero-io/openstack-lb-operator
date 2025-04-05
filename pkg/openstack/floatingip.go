@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/gophercloud/gophercloud"
 	"github.com/gophercloud/gophercloud/openstack/networking/v2/extensions/attributestags"
 	"github.com/gophercloud/gophercloud/openstack/networking/v2/extensions/layer3/floatingips"
+	"github.com/gophercloud/gophercloud/pagination"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -23,7 +25,7 @@ func (c *ClientImpl) CreateFloatingIP(
 		TagManagedBy:        TagManagedByValue,
 		TagServiceNamespace: serviceNamespace,
 		TagServiceName:      serviceName,
-		TagResourceType:     ResourceTypeFloatingIP,
+		TagResourceType:     string(ResourceTypeFloatingIP),
 	}
 
 	// Get the cluster name from environment if available
@@ -110,76 +112,45 @@ func (c *ClientImpl) GetFloatingIPByPortID(ctx context.Context, portID string) (
 
 // DeleteFloatingIP deletes a floating IP from OpenStack
 func (c *ClientImpl) DeleteFloatingIP(ctx context.Context, floatingIPID string) error {
-	logger := log.FromContext(ctx)
-
-	// First verify the floating IP exists
-	_, err := floatingips.Get(c.networkClient, floatingIPID).Extract()
-	if err != nil {
-		if IsNotFoundError(err) {
-			logger.Info("Floating IP not found, already deleted", "floatingIPID", floatingIPID)
-			return nil
-		}
-		return fmt.Errorf("failed to get floating IP %s before deletion: %w", floatingIPID, err)
-	}
-
-	// Get the tags for this floating IP
-	tags, err := attributestags.List(c.networkClient, "floatingips", floatingIPID).Extract()
-	if err != nil {
-		logger.Error(err, "Failed to get tags for floating IP - will attempt deletion anyway",
-			"floatingIPID", floatingIPID)
-		// Continue with deletion attempt even if tag check fails
-	} else {
-		// Check if the floating IP has our ownership tag
-		if !isResourceOwnedByOperator(tags) {
-			return fmt.Errorf("refusing to delete floating IP %s: not owned by this operator", floatingIPID)
-		}
-	}
-
-	err = floatingips.Delete(c.networkClient, floatingIPID).ExtractErr()
-	if err != nil {
-		if IsNotFoundError(err) {
-			logger.Info("Floating IP not found during deletion, already deleted", "floatingIPID", floatingIPID)
-			return nil
-		}
-		return fmt.Errorf("failed to delete floating IP %s: %w", floatingIPID, err)
-	}
-
-	logger.Info("Successfully deleted floating IP", "floatingIPID", floatingIPID)
-	return nil
+	return deleteResource(
+		ctx,
+		c.networkClient,
+		ResourceTypeFloatingIP,
+		floatingIPID,
+		func(client *gophercloud.ServiceClient, id string) (bool, error) {
+			_, err := floatingips.Get(client, id).Extract()
+			if err != nil {
+				if IsNotFoundError(err) {
+					return false, nil
+				}
+				return false, fmt.Errorf("failed to get floating IP %s: %w", id, err)
+			}
+			return true, nil
+		},
+		func(id string) error {
+			return floatingips.Delete(c.networkClient, id).ExtractErr()
+		},
+	)
 }
 
 // GetManagedFloatingIPs gets all floating IPs managed by this operator for a specific service
-func (c *ClientImpl) GetManagedFloatingIPs(ctx context.Context, serviceNamespace, serviceName string) ([]floatingips.FloatingIP, error) {
-	logger := log.FromContext(ctx)
-	logger.V(1).Info("Looking for managed floating IPs", "service", fmt.Sprintf("%s/%s", serviceNamespace, serviceName))
-
-	// List all floating IPs (can't filter by tags in the initial request)
-	allPages, err := floatingips.List(c.networkClient, floatingips.ListOpts{}).AllPages()
-	if err != nil {
-		return nil, fmt.Errorf("failed to list floating IPs: %w", err)
-	}
-
-	allFIPs, err := floatingips.ExtractFloatingIPs(allPages)
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract floating IPs: %w", err)
-	}
-
-	var managedFIPs []floatingips.FloatingIP
-	for _, fip := range allFIPs {
-		// Get tags for this floating IP
-		tags, err := attributestags.List(c.networkClient, "floatingips", fip.ID).Extract()
-		if err != nil {
-			logger.Error(err, "Error getting tags for floating IP", "floatingIPID", fip.ID)
-			continue
-		}
-
-		// Check if this floating IP is owned by our operator and is for this service
-		if isResourceOwnedByOperator(tags) && isResourceForService(tags, serviceNamespace, serviceName) {
-			managedFIPs = append(managedFIPs, fip)
-		}
-	}
-
-	logger.V(1).Info("Found managed floating IPs", "count", len(managedFIPs),
-		"service", fmt.Sprintf("%s/%s", serviceNamespace, serviceName))
-	return managedFIPs, nil
+func (c *ClientImpl) GetManagedFloatingIPs(
+	ctx context.Context,
+	serviceNamespace, serviceName string,
+) ([]floatingips.FloatingIP, error) {
+	return getManagedResources(
+		ctx,
+		c.networkClient,
+		string(ResourceTypeFloatingIP), // Convert ResourceType to string
+		"floating IPs",
+		serviceNamespace,
+		serviceName,
+		func() (pagination.Page, error) {
+			return floatingips.List(c.networkClient, floatingips.ListOpts{}).AllPages()
+		},
+		floatingips.ExtractFloatingIPs,
+		func(fip floatingips.FloatingIP) string {
+			return fip.ID
+		},
+	)
 }

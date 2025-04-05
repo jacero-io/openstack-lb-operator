@@ -82,13 +82,13 @@ func TestConvertMapToTags(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := convertMapToTags(tt.input)
-			
+
 			// Check if result has the same length as expected
 			if len(result) != len(tt.expected) {
 				t.Errorf("convertMapToTags() returned %d tags, want %d", len(result), len(tt.expected))
 				return
 			}
-			
+
 			// Check if all expected tags are in the result
 			// Note: Since map iteration is not deterministic, we can't check order
 			for _, expectedTag := range tt.expected {
