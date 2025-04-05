@@ -83,6 +83,18 @@ tasks:
     cmds:
       - task: utils:cleanup
 
+  # Tests
+
+  # test:
+  #   desc: Run unit tests
+  #   cmds:
+  #     - task: operator:test
+
+  # test-e2e:
+  #   desc: Run e2e tests
+  #   cmds:
+  #     - task: operator:test-e2e
+
   # Build tasks
   generate:
     desc: Generate code and manifests
