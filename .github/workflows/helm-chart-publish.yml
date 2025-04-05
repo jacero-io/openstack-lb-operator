@@ -20,6 +20,12 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Install dependencies
         run: |
           curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
@@ -39,7 +45,7 @@ jobs:
       - name: Generate Helm chart
         run: |
           # Generate manifests first
-          make manifests
+          task operator:manifests
           
           # Generate Helm chart using the operator.yaml task
           task operator:helm-chart
