@@ -18,7 +18,7 @@ jobs:
       packages: write
     runs-on: ubuntu-latest
     env:
-      PLATFORMS: linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
+      PLATFORMS: linux/arm64,linux/amd64
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -45,10 +45,10 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=dev-latest
           labels: |
-            org.opencontainers.image.authors=maintainers@jacero.io
+            org.opencontainers.image.authors=emil@jacero.io
             org.opencontainers.image.description=${{ env.DESCRIPTION }}
           annotations: |
-            org.opencontainers.image.authors=maintainers@jacero.io
+            org.opencontainers.image.authors=emil@jacero.io
             org.opencontainers.image.description=${{ env.DESCRIPTION }}
 
       - name: Log in to GitHub Container Registry

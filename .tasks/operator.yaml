@@ -97,6 +97,8 @@ tasks:
       - '{{.ROOT_DIR}}/Dockerfile'
     generates:
       - '{{.IMG}}'
+    vars:
+      PLATFORMS: "linux/amd64"
 
   docker-build-multi:
     desc: Build docker image for the manager with cross-platform support
@@ -105,8 +107,12 @@ tasks:
         vars:
           BUILD_TYPE: 'multi-platform'
           EXTRA_BUILD_ARGS: '--platform={{.PLATFORMS}}'
+    sources:
+      - '{{.ROOT_DIR}}/Dockerfile'
+    generates:
+      - '{{.IMG}}'
     vars:
-      PLATFORMS: '{{.PLATFORMS | default "linux/amd64,linux/arm64"}}'
+      PLATFORMS: '{{.PLATFORMS}}'
 
   package-crds:
     desc: Combine all CRDs into a single file

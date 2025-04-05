@@ -21,7 +21,7 @@ vars:
   LOCALBIN: '{{.ROOT_DIR}}/bin'
   GOBIN:
     sh: echo "${GOBIN:-$(go env GOPATH)/bin}"
-  PLATFORMS: linux/arm64,linux/amd64,linux/s390x,linux/ppc64le
+  PLATFORMS: linux/arm64,linux/amd64
   
   # MetalLB configuration
   METALLB_SUBNET_CIDR: '172.24.6.0/24'
