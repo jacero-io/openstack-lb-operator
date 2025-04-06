@@ -17,6 +17,112 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
+// reconcileService handles Service objects that are being created, updated, or deleted
+func (r *OpenStackLoadBalancerReconciler) reconcileService(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+
+	// Extract service name from the request name (which has format "service-handler-{svcName}")
+	nameParts := strings.Split(req.Name, "service-handler-")
+	if len(nameParts) != 2 {
+		// Not a service handler request
+		return ctrl.Result{}, nil
+	}
+
+	serviceName := nameParts[1]
+	serviceNamespace := req.Namespace
+
+	// Get the service
+	svc := &corev1.Service{}
+	if err := r.Get(ctx, client.ObjectKey{Name: serviceName, Namespace: serviceNamespace}, svc); err != nil {
+		if apierrors.IsNotFound(err) {
+			// Service doesn't exist, nothing to do
+			return ctrl.Result{}, nil
+		}
+		logger.Error(err, "Failed to get service")
+		return ctrl.Result{}, err
+	}
+
+	// If service is being deleted
+	if !svc.DeletionTimestamp.IsZero() {
+		// Get OpenStack client using stored credentials if available
+		osClient, err := r.getOpenStackClientFromService(ctx, svc)
+		if err != nil {
+			logger.Error(err, "Failed to create OpenStack client for service")
+			// If we can't get credentials, we still need to remove the finalizer
+			// to avoid blocking service deletion
+			if controllerutil.ContainsFinalizer(svc, ServiceFinalizer) {
+				// Try the direct finalizer removal first
+				svcCopy := svc.DeepCopy()
+				controllerutil.RemoveFinalizer(svcCopy, ServiceFinalizer)
+				if updateErr := updateResourceWithRetry(ctx, r.Client, svcCopy); updateErr != nil {
+					logger.Error(updateErr, "Failed to remove finalizer normally, trying force removal")
+					// If normal removal fails, try force removal
+					if forceErr := forceFinalizerRemoval(ctx, r.Client, svc); forceErr != nil {
+						logger.Error(forceErr, "Failed to force remove finalizer")
+						return ctrl.Result{RequeueAfter: RequeueAfter}, forceErr
+					}
+				}
+				logger.Info("Removed finalizer without cleaning resources - manual cleanup may be needed")
+				return ctrl.Result{}, nil
+			}
+			return ctrl.Result{RequeueAfter: RequeueAfter}, err
+		}
+
+		// Create a cleanup handler and handle finalization with force option
+		cleanupHandler := NewResourceCleanupHandler(r.Client, osClient)
+		needsRequeue, err := cleanupHandler.HandleServiceFinalizationWithForce(ctx, svc)
+		if err != nil {
+			return ctrl.Result{RequeueAfter: RequeueAfter}, err
+		}
+		if needsRequeue {
+			return ctrl.Result{RequeueAfter: RequeueAfter}, nil
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// For non-deleted services, ensure finalizer if needed
+	if svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
+		// Find all OpenStackLoadBalancer objects
+		lbs := &openstackv1alpha1.OpenStackLoadBalancerList{}
+		if err := r.List(ctx, lbs); err != nil {
+			logger.Error(err, "Failed to list OpenStackLoadBalancers")
+			return ctrl.Result{RequeueAfter: RequeueAfter}, err
+		}
+
+		// Check if the service matches any LB class
+		var matchingLBFound bool
+		var matchingLB *openstackv1alpha1.OpenStackLoadBalancer
+
+		for i, lb := range lbs.Items {
+			if isServiceMatchingLBClass(svc, lb.Spec.ClassName) {
+				matchingLBFound = true
+				matchingLB = &lbs.Items[i]
+				break
+			}
+		}
+
+		// Also check if there are annotations indicating we manage this service
+		hasOurAnnotations := hasAnnotation(svc, AnnotationPortID) || hasAnnotation(svc, AnnotationFloatingIPID)
+
+		// Add finalizer if the service matches an LB class or has our annotations
+		if (matchingLBFound || hasOurAnnotations) && !controllerutil.ContainsFinalizer(svc, ServiceFinalizer) {
+			if err := r.ensureServiceFinalizer(ctx, svc); err != nil {
+				return ctrl.Result{RequeueAfter: RequeueAfter}, err
+			}
+
+			// If we found a matching LB, store the credential reference in the service
+			if matchingLB != nil {
+				if err := r.updateServiceWithCredentials(ctx, svc, matchingLB); err != nil {
+					logger.Error(err, "Failed to update service with credentials")
+					return ctrl.Result{RequeueAfter: RequeueAfter}, err
+				}
+			}
+		}
+	}
+
+	return ctrl.Result{}, nil
+}
+
 // findOpenStackLBsForService maps from a Service to potential OpenStackLoadBalancer objects
 func (r *OpenStackLoadBalancerReconciler) findOpenStackLBsForService(ctx context.Context, obj client.Object) []reconcile.Request {
 	logger := log.FromContext(ctx)
@@ -113,107 +219,6 @@ func (r *OpenStackLoadBalancerReconciler) updateServiceWithCredentials(ctx conte
 		"secretName", lb.Spec.ApplicationCredentialSecretRef.Name)
 
 	return updateMultipleServiceAnnotations(ctx, r.Client, svc, annotations)
-}
-
-// reconcileService handles Service objects that are being created, updated, or deleted
-func (r *OpenStackLoadBalancerReconciler) reconcileService(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
-
-	// Extract service name from the request name (which has format "service-handler-{svcName}")
-	nameParts := strings.Split(req.Name, "service-handler-")
-	if len(nameParts) != 2 {
-		// Not a service handler request
-		return ctrl.Result{}, nil
-	}
-
-	serviceName := nameParts[1]
-	serviceNamespace := req.Namespace
-
-	// Get the service
-	svc := &corev1.Service{}
-	if err := r.Get(ctx, client.ObjectKey{Name: serviceName, Namespace: serviceNamespace}, svc); err != nil {
-		if apierrors.IsNotFound(err) {
-			// Service doesn't exist, nothing to do
-			return ctrl.Result{}, nil
-		}
-		logger.Error(err, "Failed to get service")
-		return ctrl.Result{}, err
-	}
-
-	// If service is being deleted
-	if !svc.DeletionTimestamp.IsZero() {
-		// Get OpenStack client using stored credentials if available
-		osClient, err := r.getOpenStackClientFromService(ctx, svc)
-		if err != nil {
-			logger.Error(err, "Failed to create OpenStack client for service")
-			// If we can't get credentials, we still need to remove the finalizer
-			// to avoid blocking service deletion
-			if controllerutil.ContainsFinalizer(svc, ServiceFinalizer) {
-				svcCopy := svc.DeepCopy()
-				controllerutil.RemoveFinalizer(svcCopy, ServiceFinalizer)
-				if updateErr := updateResourceWithRetry(ctx, r.Client, svcCopy); updateErr != nil {
-					logger.Error(updateErr, "Failed to remove finalizer")
-					return ctrl.Result{RequeueAfter: RequeueAfter}, updateErr
-				}
-				logger.Info("Removed finalizer without cleaning resources - manual cleanup may be needed")
-				return ctrl.Result{}, nil
-			}
-			return ctrl.Result{RequeueAfter: RequeueAfter}, err
-		}
-
-		// Create a cleanup handler and handle finalization
-		cleanupHandler := NewResourceCleanupHandler(r.Client, osClient)
-		needsRequeue, err := cleanupHandler.HandleServiceFinalization(ctx, svc)
-		if err != nil {
-			return ctrl.Result{RequeueAfter: RequeueAfter}, err
-		}
-		if needsRequeue {
-			return ctrl.Result{RequeueAfter: RequeueAfter}, nil
-		}
-		return ctrl.Result{}, nil
-	}
-
-	// For non-deleted services, ensure finalizer if needed
-	if svc.Spec.Type == corev1.ServiceTypeLoadBalancer {
-		// Find all OpenStackLoadBalancer objects
-		lbs := &openstackv1alpha1.OpenStackLoadBalancerList{}
-		if err := r.List(ctx, lbs); err != nil {
-			logger.Error(err, "Failed to list OpenStackLoadBalancers")
-			return ctrl.Result{RequeueAfter: RequeueAfter}, err
-		}
-
-		// Check if the service matches any LB class
-		var matchingLBFound bool
-		var matchingLB *openstackv1alpha1.OpenStackLoadBalancer
-
-		for i, lb := range lbs.Items {
-			if isServiceMatchingLBClass(svc, lb.Spec.ClassName) {
-				matchingLBFound = true
-				matchingLB = &lbs.Items[i]
-				break
-			}
-		}
-
-		// Also check if there are annotations indicating we manage this service
-		hasOurAnnotations := hasAnnotation(svc, AnnotationPortID) || hasAnnotation(svc, AnnotationFloatingIPID)
-
-		// Add finalizer if the service matches an LB class or has our annotations
-		if (matchingLBFound || hasOurAnnotations) && !controllerutil.ContainsFinalizer(svc, ServiceFinalizer) {
-			if err := r.ensureServiceFinalizer(ctx, svc); err != nil {
-				return ctrl.Result{RequeueAfter: RequeueAfter}, err
-			}
-
-			// If we found a matching LB, store the credential reference in the service
-			if matchingLB != nil {
-				if err := r.updateServiceWithCredentials(ctx, svc, matchingLB); err != nil {
-					logger.Error(err, "Failed to update service with credentials")
-					return ctrl.Result{RequeueAfter: RequeueAfter}, err
-				}
-			}
-		}
-	}
-
-	return ctrl.Result{}, nil
 }
 
 // getOpenStackClientFromService tries to get an OpenStack client using credentials

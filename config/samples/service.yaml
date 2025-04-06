@@ -30,3 +30,67 @@ spec:
     name: http
   selector:
     app: nginx
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx3
+  namespace: default
+spec:
+  loadBalancerClass: "metallb" 
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+    name: http
+  selector:
+    app: nginx
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx4
+  namespace: default
+spec:
+  loadBalancerClass: "metallb" 
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+    name: http
+  selector:
+    app: nginx
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx5
+  namespace: default
+spec:
+  loadBalancerClass: "metallb" 
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+    name: http
+  selector:
+    app: nginx
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx6
+  namespace: default
+spec:
+  loadBalancerClass: "metallb" 
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+    name: http
+  selector:
+    app: nginx

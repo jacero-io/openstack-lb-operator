@@ -3,14 +3,18 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	openstackv1alpha1 "github.com/jacero-io/openstack-lb-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
@@ -345,4 +349,111 @@ func extractResourceIDsFromAnnotations(svc *corev1.Service) (portID, floatingIPI
 		floatingIPID = svc.Annotations[AnnotationFloatingIPID]
 	}
 	return
+}
+
+// forceFinalizerRemoval is a last-resort method to remove a finalizer from a service
+// that's stuck in Terminating state. It uses a strategic merge patch to only update
+// the finalizers field, avoiding conflicts with other controllers.
+func forceFinalizerRemoval(ctx context.Context, c client.Client, svc *corev1.Service) error {
+	logger := log.FromContext(ctx).WithValues(
+		"service", svc.Name,
+		"namespace", svc.Namespace,
+	)
+
+	// Don't try if service isn't in terminating state
+	if svc.DeletionTimestamp.IsZero() {
+		return nil
+	}
+
+	logger.Info("Attempting to force remove finalizer from terminating service")
+
+	// Use strategic merge patch to only modify the finalizers field
+	patchBytes := []byte(`{"metadata":{"finalizers":null}}`)
+
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		return c.Patch(ctx, svc, client.RawPatch(types.StrategicMergePatchType, patchBytes))
+	})
+
+	if err != nil {
+		logger.Error(err, "Failed to force remove finalizer")
+		return err
+	}
+
+	logger.Info("Successfully forced finalizer removal")
+	return nil
+}
+
+// shouldForceCleanup determines if we should force cleanup based on service state
+// and multiple failed attempts
+func shouldForceCleanup(svc *corev1.Service) bool {
+	// If service is terminating and has our finalizer, we should force cleanup
+	if !svc.DeletionTimestamp.IsZero() && controllerutil.ContainsFinalizer(svc, ServiceFinalizer) {
+		// Additionally check if service has annotations suggesting OpenStack resources
+		// that can't be found in OpenStack anymore
+		return hasAnnotation(svc, AnnotationPortID) || hasAnnotation(svc, AnnotationFloatingIPID)
+	}
+	return false
+}
+
+func (h *ResourceCleanupHandler) HandleServiceFinalizationWithForce(ctx context.Context, svc *corev1.Service) (bool, error) {
+	logger := log.FromContext(ctx).WithValues(
+		"service", svc.Name,
+		"namespace", svc.Namespace,
+	)
+
+	// Skip if the service doesn't have our finalizer
+	if !controllerutil.ContainsFinalizer(svc, ServiceFinalizer) {
+		return false, nil
+	}
+
+	logger.Info("Handling finalization for service being deleted")
+
+	// Clean up resources
+	needsRequeue, err := h.CleanupResourcesForService(ctx, svc)
+	if err != nil {
+		logger.Error(err, "Error during resource cleanup")
+
+		// Check if we should force finalizer removal due to being stuck
+		if shouldForceCleanup(svc) { // <-- Removed ctx parameter here
+			logger.Info("Detected stuck service cleanup, forcing finalizer removal")
+			if err := forceFinalizerRemoval(ctx, h.Client, svc); err != nil {
+				return true, err
+			}
+			return false, nil
+		}
+
+		return true, err
+	}
+
+	// If cleanup is still in progress, check if we need to force it
+	if needsRequeue {
+		// Check if we should force finalizer removal
+		if shouldForceCleanup(svc) { // <-- Removed ctx parameter here too
+			logger.Info("Cleanup incomplete but service is terminating, forcing finalizer removal")
+			if err := forceFinalizerRemoval(ctx, h.Client, svc); err != nil {
+				return true, err
+			}
+			return false, nil
+		}
+		return true, nil
+	}
+
+	// All resources cleaned up, remove finalizer normally
+	svcCopy := svc.DeepCopy()
+	controllerutil.RemoveFinalizer(svcCopy, ServiceFinalizer)
+	if err := updateResourceWithRetry(ctx, h.Client, svcCopy); err != nil {
+		logger.Error(err, "Failed to remove finalizer")
+
+		// If the normal method fails, try forcing it
+		if strings.Contains(err.Error(), "conflict") || !svc.DeletionTimestamp.IsZero() {
+			if err := forceFinalizerRemoval(ctx, h.Client, svc); err != nil {
+				return true, err
+			}
+		} else {
+			return true, err
+		}
+	}
+
+	logger.Info("Successfully removed finalizer, service can now be deleted")
+	return false, nil
 }

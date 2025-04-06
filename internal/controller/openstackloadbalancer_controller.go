@@ -424,14 +424,28 @@ func (r *OpenStackLoadBalancerReconciler) handleDeletion(ctx context.Context, lb
 				"service", svc.Name,
 				"namespace", svc.Namespace)
 
-			needs, err := cleanupHandler.CleanupResourcesForService(ctx, svc)
-			if err != nil {
-				logger.Error(err, "Error cleaning up resources for service",
-					"service", svc.Name,
-					"namespace", svc.Namespace)
-				needsRequeue = true
-			} else if needs {
-				needsRequeue = true
+			// Check if service is terminating - if so, use force method
+			if !svc.DeletionTimestamp.IsZero() {
+				needs, err := cleanupHandler.HandleServiceFinalizationWithForce(ctx, svc)
+				if err != nil {
+					logger.Error(err, "Error during forced cleanup for terminating service",
+						"service", svc.Name,
+						"namespace", svc.Namespace)
+					needsRequeue = true
+				} else if needs {
+					needsRequeue = true
+				}
+			} else {
+				// For non-terminating services, use standard cleanup
+				needs, err := cleanupHandler.CleanupResourcesForService(ctx, svc)
+				if err != nil {
+					logger.Error(err, "Error cleaning up resources for service",
+						"service", svc.Name,
+						"namespace", svc.Namespace)
+					needsRequeue = true
+				} else if needs {
+					needsRequeue = true
+				}
 			}
 		}
 	}
