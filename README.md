@@ -121,7 +121,8 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 ## Roadmap
 
 - [ ] Support Envoy Gateway Service
-- [ ] Ability to add annotation to Service
+- [ ] Support labels and namespace targets for more fine grained resource filtering
+- [ ] Ability to add annotation to Service directly to trigger the controller
 - [ ] Enhanced logging and monitoring
 
 ## Maintainers
