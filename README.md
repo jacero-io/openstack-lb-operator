@@ -34,7 +34,7 @@ The OpenStack Load Balancer Operator is a Kubernetes operator that seamlessly in
 
 ```bash
 
-helm install openstack-lb-operator oci://openstack-lb-operator/openstack-lb-operator
+helm install openstack-lb-operator oci://openstack-lb-operator/charts/openstack-lb-operator
 ```
 
 ## Configuration
