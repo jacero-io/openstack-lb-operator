@@ -9,8 +9,10 @@ controllerManager:
       capabilities:
         drop:
         - ALL
+    env:
+      openstackCaCertPath: /etc/ssl/certs/openstack-ca
     image:
-      repository:  ghcr.io/jacero-io/openstack-lb-operator
+      repository: ghcr.io/jacero-io/openstack-lb-operator
       tag: v0.0.0-latest
     resources:
       limits:
@@ -34,3 +36,20 @@ metricsService:
     protocol: TCP
     targetPort: 8443
   type: ClusterIP
+# CA Certificates configuration
+caCerts:
+  # Set to false by default - users can enable when needed
+  enabled: false
+  # Source can be 'configMap' or 'secret'
+  source: configMap
+  # Name of the configMap or secret
+  name: openstack-ca-certs
+  # Mount path - the controller will scan this directory for certificate files
+  mountPath: /etc/ssl/certs/openstack-ca
+  # Individual certificate files or a bundle of certificates
+  items:
+    # Default empty to mount all keys from the configMap/secret
+    {}
+    # If you want to explicitly map specific keys to files, use this format:
+    # ca1.crt: company-ca.crt
+    # ca2.crt: department-ca.crt

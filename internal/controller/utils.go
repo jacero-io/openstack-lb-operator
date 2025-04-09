@@ -7,6 +7,7 @@ import (
 	"time"
 
 	openstackv1alpha1 "github.com/jacero-io/openstack-lb-operator/api/v1alpha1"
+	"github.com/jacero-io/openstack-lb-operator/pkg/openstack"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -49,6 +50,22 @@ var (
 		Jitter:   0.1,
 	}
 )
+
+// getOpenStackClient creates a new OpenStack client using credentials from the secret
+func (r *OpenStackLoadBalancerReconciler) getOpenStackClient(ctx context.Context, lb *openstackv1alpha1.OpenStackLoadBalancer) (openstack.Client, error) {
+	logger := log.FromContext(ctx)
+
+	logger.V(1).Info("Getting OpenStack client using credentials",
+		"secretName", lb.Spec.ApplicationCredentialSecretRef.Name,
+		"secretNamespace", lb.Spec.ApplicationCredentialSecretRef.Namespace)
+
+	return openstack.NewClient(
+		ctx,
+		r.Client,
+		lb.Spec.ApplicationCredentialSecretRef.Name,
+		lb.Spec.ApplicationCredentialSecretRef.Namespace,
+	)
+}
 
 // isServiceMatchingLBClass checks if a service matches the specified LoadBalancer class
 func isServiceMatchingLBClass(svc *corev1.Service, className string) bool {
@@ -414,7 +431,7 @@ func (h *ResourceCleanupHandler) HandleServiceFinalizationWithForce(ctx context.
 		logger.Error(err, "Error during resource cleanup")
 
 		// Check if we should force finalizer removal due to being stuck
-		if shouldForceCleanup(svc) { // <-- Removed ctx parameter here
+		if shouldForceCleanup(svc) {
 			logger.Info("Detected stuck service cleanup, forcing finalizer removal")
 			if err := forceFinalizerRemoval(ctx, h.Client, svc); err != nil {
 				return true, err
@@ -428,7 +445,7 @@ func (h *ResourceCleanupHandler) HandleServiceFinalizationWithForce(ctx context.
 	// If cleanup is still in progress, check if we need to force it
 	if needsRequeue {
 		// Check if we should force finalizer removal
-		if shouldForceCleanup(svc) { // <-- Removed ctx parameter here too
+		if shouldForceCleanup(svc) {
 			logger.Info("Cleanup incomplete but service is terminating, forcing finalizer removal")
 			if err := forceFinalizerRemoval(ctx, h.Client, svc); err != nil {
 				return true, err

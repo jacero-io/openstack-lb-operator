@@ -26,6 +26,8 @@ spec:
         command:
         - /manager
         env:
+        - name: OPENSTACK_CA_CERT_PATH
+          value: {{ quote .Values.controllerManager.manager.env.openstackCaCertPath }}
         - name: KUBERNETES_CLUSTER_DOMAIN
           value: {{ quote .Values.kubernetesClusterDomain }}
         image: {{ .Values.controllerManager.manager.image.repository }}:{{ .Values.controllerManager.manager.image.tag
@@ -47,7 +49,16 @@ spec:
           }}
         securityContext: {{- toYaml .Values.controllerManager.manager.containerSecurityContext
           | nindent 10 }}
+        volumeMounts:
+        - mountPath: /etc/ssl/certs/openstack-ca
+          name: ca-certs
+          readOnly: true
       securityContext: {{- toYaml .Values.controllerManager.podSecurityContext | nindent
         8 }}
       serviceAccountName: {{ include "charts.fullname" . }}-controller-manager
       terminationGracePeriodSeconds: 10
+      volumes:
+      - configMap:
+          name: openstack-ca-certs
+          optional: true
+        name: ca-certs

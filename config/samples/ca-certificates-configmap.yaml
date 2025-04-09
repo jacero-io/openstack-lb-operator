@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openstack-ca-certs
+  namespace: system
+data:
+  ca.crt: |
+    # Add your PEM-encoded CA certificate here
+    # -----BEGIN CERTIFICATE-----
+    # ...
+    # -----END CERTIFICATE-----

@@ -1,0 +1,26 @@
+# Patch to add CA certificates support with multiple certificates
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controller-manager
+  namespace: system
+spec:
+  template:
+    spec:
+      containers:
+      - name: manager
+        # Add environment variable for CA cert directory path
+        env:
+        - name: OPENSTACK_CA_CERT_PATH
+          value: /etc/ssl/certs/openstack-ca
+        # Add volume mount for CA certs
+        volumeMounts:
+        - name: ca-certs
+          mountPath: /etc/ssl/certs/openstack-ca
+          readOnly: true
+      # Add volume for CA certs
+      volumes:
+      - name: ca-certs
+        configMap:
+          name: openstack-ca-certs
+          optional: true

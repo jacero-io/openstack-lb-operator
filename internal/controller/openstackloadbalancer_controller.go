@@ -467,22 +467,6 @@ func (r *OpenStackLoadBalancerReconciler) handleDeletion(ctx context.Context, lb
 	return ctrl.Result{}, nil
 }
 
-// getOpenStackClient creates a new OpenStack client using credentials from the secret
-func (r *OpenStackLoadBalancerReconciler) getOpenStackClient(ctx context.Context, lb *openstackv1alpha1.OpenStackLoadBalancer) (openstack.Client, error) {
-	logger := log.FromContext(ctx)
-
-	logger.V(1).Info("Getting OpenStack client using credentials",
-		"secretName", lb.Spec.ApplicationCredentialSecretRef.Name,
-		"secretNamespace", lb.Spec.ApplicationCredentialSecretRef.Namespace)
-
-	return openstack.NewClient(
-		ctx,
-		r.Client,
-		lb.Spec.ApplicationCredentialSecretRef.Name,
-		lb.Spec.ApplicationCredentialSecretRef.Namespace,
-	)
-}
-
 // SetupWithManager sets up the controller with the Manager.
 func (r *OpenStackLoadBalancerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Set the event recorder
