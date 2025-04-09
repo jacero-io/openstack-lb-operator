@@ -27,6 +27,9 @@ type NetworkClient interface {
 
 	// GetAllPorts gets all ports in OpenStack
 	GetAllPorts(ctx context.Context) ([]ports.Port, error)
+
+	// GetFloatingIPDetails gets details of a specific floating IP by ID
+	GetFloatingIPDetails(ctx context.Context, floatingIPID string) (*floatingips.FloatingIP, error)
 }
 
 // PortClient handles port operations

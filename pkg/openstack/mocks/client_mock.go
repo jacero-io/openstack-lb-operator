@@ -39,6 +39,7 @@ type MockClient struct {
 
 	GetAllFloatingIPsFunc func(ctx context.Context) ([]floatingips.FloatingIP, error)
 	GetAllPortsFunc       func(ctx context.Context) ([]ports.Port, error)
+	GetFloatingIPDetailsFunc func(ctx context.Context, floatingIPID string) (*floatingips.FloatingIP, error)
 }
 
 // Ensure MockClient implements Client interface
@@ -149,4 +150,14 @@ func (m *MockClient) GetAllPorts(ctx context.Context) ([]ports.Port, error) {
 		return m.GetAllPortsFunc(ctx)
 	}
 	return []ports.Port{}, nil
+}
+
+func (m *MockClient) GetFloatingIPDetails(ctx context.Context, floatingIPID string) (*floatingips.FloatingIP, error) {
+    if m.GetFloatingIPDetailsFunc != nil {
+        return m.GetFloatingIPDetailsFunc(ctx, floatingIPID)
+    }
+    return &floatingips.FloatingIP{
+        ID:         floatingIPID,
+        FloatingIP: "192.168.1.100",
+    }, nil
 }
