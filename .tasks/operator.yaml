@@ -120,11 +120,21 @@ tasks:
       - manifests
     cmds:
       - |
-        echo "---" > {{.ROOT_DIR}}/openstack-lb-operator-crds.yaml
+        # Start with empty file
+        : > {{.ROOT_DIR}}/openstack-lb-operator-crds.yaml
+        
+        # Process each CRD file
         for file in {{.ROOT_DIR}}/config/crd/bases/*.yaml; do
-          echo "---" >> {{.ROOT_DIR}}/openstack-lb-operator-crds.yaml
+          # Add separator between documents if not the first file
+          if [ -s {{.ROOT_DIR}}/openstack-lb-operator-crds.yaml ]; then
+            echo "---" >> {{.ROOT_DIR}}/openstack-lb-operator-crds.yaml
+          fi
+          
+          # Add file content maintaining proper YAML structure
           cat $file >> {{.ROOT_DIR}}/openstack-lb-operator-crds.yaml
         done
+        
+        echo "Successfully generated openstack-lb-operator-crds.yaml"
     generates:
       - '{{.ROOT_DIR}}/openstack-lb-operator-crds.yaml'
 
@@ -140,6 +150,13 @@ tasks:
       - |
         echo "Generating Helm chart from manifests..."
         {{.KUSTOMIZE_CMD}} build {{.ROOT_DIR}}/config/default | {{.HELMIFY_CMD}} -crd-dir {{.ROOT_DIR}}/charts
+        
+        # Add the CA certificates values to the generated chart
+        if [ -f {{.ROOT_DIR}}/hack/helmify-values.yaml ]; then
+          echo "Merging custom values into chart..."
+          # Append our CA cert values to the generated values.yaml
+          cat {{.ROOT_DIR}}/hack/helmify-values.yaml >> {{.ROOT_DIR}}/charts/values.yaml
+        fi
       - echo "Helm chart generated successfully at {{.ROOT_DIR}}/charts"
     generates:
       - '{{.ROOT_DIR}}/charts/Chart.yaml'
