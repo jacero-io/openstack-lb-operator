@@ -30,7 +30,7 @@ jobs:
           version: v1.63.4
 
   test:
-    name: Run Tests
+    name: Run tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -50,10 +50,11 @@ jobs:
       - name: Run tests
         run: |
           go mod tidy
+          task util:setup
           task operator:test
 
   test-e2e:
-    name: Run on Ubuntu
+    name: Run on e2e tests
     runs-on: ubuntu-latest
     steps:
       - name: Clone the code
@@ -85,4 +86,5 @@ jobs:
       - name: Running Test e2e
         run: |
           go mod tidy
+          task util:setup
           task operator:test-e2e
