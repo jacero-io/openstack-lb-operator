@@ -157,9 +157,9 @@ func (c *ClientImpl) GetManagedFloatingIPs(
 
 // GetFloatingIPDetails gets details of a specific floating IP
 func (c *ClientImpl) GetFloatingIPDetails(ctx context.Context, floatingIPID string) (*floatingips.FloatingIP, error) {
-    fip, err := floatingips.Get(c.networkClient, floatingIPID).Extract()
-    if err != nil {
-        return nil, fmt.Errorf("failed to get floating IP %s: %w", floatingIPID, err)
-    }
-    return fip, nil
+	fip, err := floatingips.Get(c.networkClient, floatingIPID).Extract()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get floating IP %s: %w", floatingIPID, err)
+	}
+	return fip, nil
 }

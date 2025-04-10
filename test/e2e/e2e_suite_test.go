@@ -17,6 +17,7 @@ limitations under the License.
 package e2e
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,6 +29,16 @@ import (
 	"github.com/jacero-io/openstack-lb-operator/test/utils"
 )
 
+// Define flags that our test can accept
+var (
+	kubeconfigPath string
+)
+
+func init() {
+	// Define and parse the kubeconfig flag
+	flag.StringVar(&kubeconfigPath, "kubeconfig", "", "Path to kubeconfig file")
+}
+
 var (
 	// Optional Environment Variables:
 	// - CERT_MANAGER_INSTALL_SKIP=true: Skips CertManager installation during test setup.
@@ -37,10 +48,28 @@ var (
 	// isCertManagerAlreadyInstalled will be set true when CertManager CRDs be found on the cluster
 	isCertManagerAlreadyInstalled = false
 
-	// projectImage is the name of the image which will be build and loaded
+	// projectImage is the name of the image which will be built and loaded
 	// with the code source changes to be tested.
-	projectImage = "example.com/openstack-lb-operator:v0.0.1"
+	// Use a local image tag that will be built and loaded directly into Kind
+	projectImage = "example.com/openstack-lb-operator:test"
+
+	// kindClusterName is the name of the kind cluster
+	kindClusterName = os.Getenv("KIND_CLUSTER_NAME")
 )
+
+func init() {
+	// Set default kind cluster name if not provided
+	if kindClusterName == "" {
+		kindClusterName = "kind"
+	}
+
+	// Set KUBECONFIG environment variable from flag if provided
+	if kubeconfigPath != "" {
+		if err := os.Setenv("KUBECONFIG", kubeconfigPath); err != nil {
+			_, _ = fmt.Fprintf(GinkgoWriter, "Warning: Failed to set KUBECONFIG environment variable: %v\n", err)
+		}
+	}
+}
 
 // TestE2E runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,
 // temporary environment to validate project changes with the the purposed to be used in CI jobs.
@@ -53,16 +82,23 @@ func TestE2E(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
+	// Parse flags (required for testing packages)
+	flag.Parse()
+
 	By("building the manager(Operator) image")
 	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectImage))
 	_, err := utils.Run(cmd)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the manager(Operator) image")
 
-	// TODO(user): If you want to change the e2e test vendor from Kind, ensure the image is
-	// built and available before running the tests. Also, remove the following block.
+	// Load the image directly into Kind
 	By("loading the manager(Operator) image on Kind")
-	err = utils.LoadImageToKindClusterWithName(projectImage)
+	err = utils.LoadImageToKindClusterWithName(projectImage, kindClusterName)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager(Operator) image into Kind")
+
+	// Update kustomization to use the local image
+	By("updating kustomization to use local image")
+	err = updateKustomizationImage(projectImage)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to update kustomization with local image")
 
 	// The tests-e2e are intended to run on a temporary cluster that is created and destroyed for testing.
 	// To prevent errors when tests run in environments with CertManager already installed,
@@ -87,3 +123,12 @@ var _ = AfterSuite(func() {
 		utils.UninstallCertManager()
 	}
 })
+
+// updateKustomizationImage updates the kustomization file to use the local image
+func updateKustomizationImage(image string) error {
+	cmd := exec.Command("sed", "-i",
+		fmt.Sprintf("s|ghcr.io/jacero-io/openstack-lb-operator:v0.0.0-latest|%s|g", image),
+		"config/manager/manager.yaml")
+	_, err := utils.Run(cmd)
+	return err
+}

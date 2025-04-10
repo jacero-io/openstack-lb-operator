@@ -85,15 +85,15 @@ tasks:
 
   # Tests
 
-  # test:
-  #   desc: Run unit tests
-  #   cmds:
-  #     - task: operator:test
+  test:
+    desc: Run unit tests
+    cmds:
+      - task: operator:test
 
-  # test-e2e:
-  #   desc: Run e2e tests
-  #   cmds:
-  #     - task: operator:test-e2e
+  test-e2e:
+    desc: Run e2e tests
+    cmds:
+      - task: operator:test-e2e
 
   # Build tasks
   generate:

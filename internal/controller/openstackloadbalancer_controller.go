@@ -179,56 +179,135 @@ func (r *OpenStackLoadBalancerReconciler) processService(
 		"ip", serviceIP,
 	)
 
-	// Ensure the service has our finalizer
-	if !controllerutil.ContainsFinalizer(svc, ServiceFinalizer) && svc.DeletionTimestamp.IsZero() {
-		svcCopy := svc.DeepCopy()
-		controllerutil.AddFinalizer(svcCopy, ServiceFinalizer)
-
-		if err := updateResourceWithRetry(ctx, r.Client, svcCopy); err != nil {
-			logger.Error(err, "Failed to add finalizer to service")
-			return true, err
-		}
-
-		logger.Info("Added finalizer to service")
-		// Return early to avoid further processing in this reconciliation
-		return true, nil
-	}
-
-	// Ensure the service has our credential references
-	if !hasAnnotation(svc, AnnotationCredentialsSecretName) ||
-		!hasAnnotation(svc, AnnotationCredentialsSecretNamespace) {
-		annotationsToUpdate := map[string]string{
-			AnnotationCredentialsSecretName:      lb.Spec.ApplicationCredentialSecretRef.Name,
-			AnnotationCredentialsSecretNamespace: lb.Spec.ApplicationCredentialSecretRef.Namespace,
-		}
-		if err := updateMultipleServiceAnnotations(ctx, r.Client, svc, annotationsToUpdate); err != nil {
-			logger.Error(err, "Failed to update service with credential annotations")
-			return true, err
-		}
-		logger.Info("Added credential references to service annotations")
-		// Continue processing in this reconciliation
-	}
-
 	// Don't proceed with resource creation if the service is being deleted
 	if !svc.DeletionTimestamp.IsZero() {
 		logger.Info("Service is being deleted, skipping resource creation")
 		return false, nil
 	}
 
-	// Detect network and subnet for the service IP if not already cached
-	if lb.Status.LBNetworkID == "" || lb.Status.LBSubnetID == "" {
-		networkID, subnetID, err := osClient.DetectNetworkForIP(ctx, serviceIP)
-		if err != nil {
-			logger.Error(err, "Failed to detect network for service IP")
-			setCondition(lb, ConditionTypeNetworkDetected, metav1.ConditionFalse, "NetworkDetectionFailed", err.Error())
-			return true, err
-		}
-
-		lb.Status.LBNetworkID = networkID
-		lb.Status.LBSubnetID = subnetID
-		setCondition(lb, ConditionTypeNetworkDetected, metav1.ConditionTrue, "NetworkDetected",
-			fmt.Sprintf("Detected network %s and subnet %s for IP %s", networkID, subnetID, serviceIP))
+	// Step 1: Ensure service has our finalizer
+	if needsRequeue, err := r.ensureServiceHasFinalizer(ctx, svc); needsRequeue || err != nil {
+		return needsRequeue, err
 	}
+
+	// Step 2: Ensure service has credential references
+	if needsRequeue, err := r.ensureServiceHasCredentials(ctx, svc, lb); needsRequeue || err != nil {
+		return needsRequeue, err
+	}
+
+	// Step 3: Detect network and subnet for the service IP
+	if needsRequeue, err := r.detectNetworkForLB(ctx, lb, osClient, serviceIP); needsRequeue || err != nil {
+		return needsRequeue, err
+	}
+
+	// Step 4: Ensure port exists for the service
+	portID, needsRequeue, err := r.ensurePortExists(ctx, lb, svc, osClient, serviceIP)
+	if needsRequeue || err != nil {
+		return needsRequeue, err
+	}
+
+	// Step 5: Handle floating IP if enabled
+	if lb.Spec.CreateFloatingIP {
+		needsRequeue, err := r.handleFloatingIP(ctx, lb, svc, osClient, portID)
+		if needsRequeue || err != nil {
+			return needsRequeue, err
+		}
+	}
+
+	return false, nil
+}
+
+// ensureServiceHasFinalizer ensures the service has our finalizer
+func (r *OpenStackLoadBalancerReconciler) ensureServiceHasFinalizer(
+	ctx context.Context,
+	svc *corev1.Service,
+) (bool, error) {
+	logger := log.FromContext(ctx)
+
+	// Skip if service already has our finalizer
+	if controllerutil.ContainsFinalizer(svc, ServiceFinalizer) {
+		return false, nil
+	}
+
+	// Add our finalizer
+	svcCopy := svc.DeepCopy()
+	controllerutil.AddFinalizer(svcCopy, ServiceFinalizer)
+
+	if err := updateResourceWithRetry(ctx, r.Client, svcCopy); err != nil {
+		logger.Error(err, "Failed to add finalizer to service")
+		return true, err
+	}
+
+	logger.Info("Added finalizer to service")
+	return true, nil // Return true to requeue and avoid further processing in this reconciliation
+}
+
+// ensureServiceHasCredentials ensures the service has our credential references
+func (r *OpenStackLoadBalancerReconciler) ensureServiceHasCredentials(
+	ctx context.Context,
+	svc *corev1.Service,
+	lb *openstackv1alpha1.OpenStackLoadBalancer,
+) (bool, error) {
+	logger := log.FromContext(ctx)
+
+	// Skip if service already has credential references
+	if hasAnnotation(svc, AnnotationCredentialsSecretName) &&
+		hasAnnotation(svc, AnnotationCredentialsSecretNamespace) {
+		return false, nil
+	}
+
+	// Add credential references
+	annotationsToUpdate := map[string]string{
+		AnnotationCredentialsSecretName:      lb.Spec.ApplicationCredentialSecretRef.Name,
+		AnnotationCredentialsSecretNamespace: lb.Spec.ApplicationCredentialSecretRef.Namespace,
+	}
+	if err := updateMultipleServiceAnnotations(ctx, r.Client, svc, annotationsToUpdate); err != nil {
+		logger.Error(err, "Failed to update service with credential annotations")
+		return true, err
+	}
+	logger.Info("Added credential references to service annotations")
+	return false, nil // Continue processing in this reconciliation
+}
+
+// detectNetworkForLB detects the network and subnet for the service IP
+func (r *OpenStackLoadBalancerReconciler) detectNetworkForLB(
+	ctx context.Context,
+	lb *openstackv1alpha1.OpenStackLoadBalancer,
+	osClient openstack.Client,
+	serviceIP string,
+) (bool, error) {
+	logger := log.FromContext(ctx)
+
+	// Skip if network and subnet are already detected
+	if lb.Status.LBNetworkID != "" && lb.Status.LBSubnetID != "" {
+		return false, nil
+	}
+
+	// Detect network and subnet
+	networkID, subnetID, err := osClient.DetectNetworkForIP(ctx, serviceIP)
+	if err != nil {
+		logger.Error(err, "Failed to detect network for service IP")
+		setCondition(lb, ConditionTypeNetworkDetected, metav1.ConditionFalse, "NetworkDetectionFailed", err.Error())
+		return true, err
+	}
+
+	// Update status
+	lb.Status.LBNetworkID = networkID
+	lb.Status.LBSubnetID = subnetID
+	setCondition(lb, ConditionTypeNetworkDetected, metav1.ConditionTrue, "NetworkDetected",
+		fmt.Sprintf("Detected network %s and subnet %s for IP %s", networkID, subnetID, serviceIP))
+	return false, nil
+}
+
+// ensurePortExists ensures a port exists for the service
+func (r *OpenStackLoadBalancerReconciler) ensurePortExists(
+	ctx context.Context,
+	lb *openstackv1alpha1.OpenStackLoadBalancer,
+	svc *corev1.Service,
+	osClient openstack.Client,
+	serviceIP string,
+) (string, bool, error) {
+	logger := log.FromContext(ctx)
 
 	// Check if port already exists for this service (from annotation)
 	var portID string
@@ -238,162 +317,185 @@ func (r *OpenStackLoadBalancerReconciler) processService(
 		// Verify port still exists in OpenStack
 		exists, err := osClient.GetPort(ctx, portID)
 		if err != nil {
-			return true, fmt.Errorf("failed to verify port %s: %w", portID, err)
+			return "", true, fmt.Errorf("failed to verify port %s: %w", portID, err)
 		}
 
 		if !exists {
-			// Update annotation to remove the old port ID and reuse the return value
+			// Update annotation to remove the old port ID
 			err := updateServiceAnnotationWithRetry(ctx, r.Client, svc, AnnotationPortID, "")
-			return true, err
+			return "", true, err
 		}
+
+		return portID, false, nil
 	}
 
 	// Create port if it doesn't exist
-	if portID == "" {
-		portName := fmt.Sprintf("k8s-lb-%s-%s", svc.Namespace, svc.Name)
-		description := fmt.Sprintf("Port created for Kubernetes service %s/%s by OpenStack LB Operator",
-			svc.Namespace, svc.Name)
+	portName := fmt.Sprintf("k8s-lb-%s-%s", svc.Namespace, svc.Name)
+	description := fmt.Sprintf("Port created for Kubernetes service %s/%s by OpenStack LB Operator",
+		svc.Namespace, svc.Name)
 
-		newPortID, err := osClient.CreatePort(
-			ctx,
-			lb.Status.LBNetworkID,
-			lb.Status.LBSubnetID,
-			portName,
-			serviceIP,
-			description,
-			svc.Namespace,
-			svc.Name,
-		)
-		if err != nil {
-			logger.Error(err, "Failed to create OpenStack port")
-			setCondition(lb, ConditionTypePortCreated, metav1.ConditionFalse, "PortCreationFailed", err.Error())
-			return true, err
-		}
-
-		portID = newPortID
-
-		// Update the annotation on the service
-		if err := updateServiceAnnotationWithRetry(ctx, r.Client, svc, AnnotationPortID, portID); err != nil {
-			logger.Error(err, "Failed to update service with port ID annotation")
-			return true, err
-		}
-
-		// Create an event for the service
-		r.Recorder.Eventf(svc, corev1.EventTypeNormal, "PortCreated",
-			"Created OpenStack port %s for service IP %s", portID, serviceIP)
-
-		setCondition(lb, ConditionTypePortCreated, metav1.ConditionTrue, "PortCreated",
-			fmt.Sprintf("Created port %s for IP %s", portID, serviceIP))
+	newPortID, err := osClient.CreatePort(
+		ctx,
+		lb.Status.LBNetworkID,
+		lb.Status.LBSubnetID,
+		portName,
+		serviceIP,
+		description,
+		svc.Namespace,
+		svc.Name,
+	)
+	if err != nil {
+		logger.Error(err, "Failed to create OpenStack port")
+		setCondition(lb, ConditionTypePortCreated, metav1.ConditionFalse, "PortCreationFailed", err.Error())
+		return "", true, err
 	}
 
-	// Handle Floating IP if enabled
-	if lb.Spec.CreateFloatingIP {
-		// Check if floating IP already exists for this service (from annotation)
-		var floatingIPID string
-		var floatingIPAddress string
-		if val, exists := svc.Annotations[AnnotationFloatingIPID]; exists && val != "" {
-			floatingIPID = val
-	
-			// Verify floating IP still exists in OpenStack
-			exists, err := osClient.GetFloatingIP(ctx, floatingIPID)
-			if err != nil {
-				return true, fmt.Errorf("failed to verify floating IP %s: %w", floatingIPID, err)
-			}
-	
-			if !exists {
-				// Update annotation to remove the old floating IP ID and reuse the return value
-				err := updateServiceAnnotationWithRetry(ctx, r.Client, svc, AnnotationFloatingIPID, "")
-				return true, err
-			}
-	
-			// Get the floating IP address if we have the ID
-			// This is needed to update the service status
-			floatingIP, err := osClient.GetFloatingIPDetails(ctx, floatingIPID)
-			if err != nil {
-				return true, fmt.Errorf("failed to get floating IP details for %s: %w", floatingIPID, err)
-			}
-			floatingIPAddress = floatingIP.FloatingIP
+	portID = newPortID
+
+	// Update the annotation on the service
+	if err := updateServiceAnnotationWithRetry(ctx, r.Client, svc, AnnotationPortID, portID); err != nil {
+		logger.Error(err, "Failed to update service with port ID annotation")
+		return portID, true, err
+	}
+
+	// Create an event for the service
+	r.Recorder.Eventf(svc, corev1.EventTypeNormal, "PortCreated",
+		"Created OpenStack port %s for service IP %s", portID, serviceIP)
+
+	setCondition(lb, ConditionTypePortCreated, metav1.ConditionTrue, "PortCreated",
+		fmt.Sprintf("Created port %s for IP %s", portID, serviceIP))
+
+	return portID, false, nil
+}
+
+// handleFloatingIP ensures a floating IP exists for the service
+func (r *OpenStackLoadBalancerReconciler) handleFloatingIP(
+	ctx context.Context,
+	lb *openstackv1alpha1.OpenStackLoadBalancer,
+	svc *corev1.Service,
+	osClient openstack.Client,
+	portID string,
+) (bool, error) {
+	logger := log.FromContext(ctx)
+
+	// Check if floating IP already exists for this service (from annotation)
+	var floatingIPAddress string
+
+	if val, exists := svc.Annotations[AnnotationFloatingIPID]; exists && val != "" {
+		floatingIPID := val
+
+		// Verify floating IP still exists in OpenStack
+		exists, err := osClient.GetFloatingIP(ctx, floatingIPID)
+		if err != nil {
+			return true, fmt.Errorf("failed to verify floating IP %s: %w", floatingIPID, err)
 		}
-	
-		// Create floating IP if it doesn't exist
-		if floatingIPID == "" {
-			if lb.Spec.FloatingIPNetworkID == "" {
-				err := fmt.Errorf("floatingIPNetworkID must be specified when createFloatingIP is true")
-				logger.Error(err, "Missing floating IP network ID")
-				setCondition(lb, ConditionTypeFloatingIPCreated, metav1.ConditionFalse, "MissingFloatingIPNetwork", err.Error())
-				return true, err
-			}
-	
-			// First, check if there's already a floating IP associated with this port in OpenStack
-			existingFIPID, existingFIPAddress, err := osClient.GetFloatingIPByPortID(ctx, portID)
-			if err != nil {
-				logger.Error(err, "Failed to check for existing floating IPs")
-				return true, err
-			}
-	
-			if existingFIPID != "" {
-				// Found existing floating IP, use it instead of creating a new one
-				floatingIPID = existingFIPID
-				floatingIPAddress = existingFIPAddress
-	
-				// Update the annotation on the service
-				if err := updateServiceAnnotationWithRetry(ctx, r.Client, svc, AnnotationFloatingIPID, floatingIPID); err != nil {
-					logger.Error(err, "Failed to update service with floating IP ID annotation")
-					return true, err
-				}
-	
-				// Create an event for the service
-				r.Recorder.Eventf(svc, corev1.EventTypeNormal, "FloatingIPFound",
-					"Found existing OpenStack floating IP %s (%s) for service", floatingIPID, existingFIPAddress)
-	
-				setCondition(lb, ConditionTypeFloatingIPCreated, metav1.ConditionTrue, "FloatingIPFound",
-					fmt.Sprintf("Found existing floating IP %s (%s) for port %s", floatingIPID, existingFIPAddress, portID))
-			} else {
-				description := fmt.Sprintf("Floating IP for Kubernetes service %s/%s by OpenStack LB Operator",
-					svc.Namespace, svc.Name)
-	
-				newFloatingIPID, newFloatingIPAddress, err := osClient.CreateFloatingIP(
-					ctx,
-					lb.Spec.FloatingIPNetworkID,
-					portID,
-					description,
-					svc.Namespace,
-					svc.Name,
-				)
-				if err != nil {
-					logger.Error(err, "Failed to create OpenStack floating IP")
-					setCondition(lb, ConditionTypeFloatingIPCreated, metav1.ConditionFalse, "FloatingIPCreationFailed", err.Error())
-					return true, err
-				}
-	
-				floatingIPID = newFloatingIPID
-				floatingIPAddress = newFloatingIPAddress
-	
-				// Update the annotation on the service
-				if err := updateServiceAnnotationWithRetry(ctx, r.Client, svc, AnnotationFloatingIPID, floatingIPID); err != nil {
-					logger.Error(err, "Failed to update service with floating IP ID annotation")
-					return true, err
-				}
-	
-				// Create an event for the service
-				r.Recorder.Eventf(svc, corev1.EventTypeNormal, "FloatingIPCreated",
-					"Created OpenStack floating IP %s (%s) for service", floatingIPID, floatingIPAddress)
-	
-				setCondition(lb, ConditionTypeFloatingIPCreated, metav1.ConditionTrue, "FloatingIPCreated",
-					fmt.Sprintf("Created floating IP %s (%s) for port %s", floatingIPID, floatingIPAddress, portID))
-			}
+
+		if !exists {
+			// Update annotation to remove the old floating IP ID
+			err := updateServiceAnnotationWithRetry(ctx, r.Client, svc, AnnotationFloatingIPID, "")
+			return true, err
 		}
-	
-		// Update the service status with the floating IP address
-		if floatingIPAddress != "" {
-			if err := updateServiceExternalIPs(ctx, r.Client, svc, floatingIPAddress); err != nil {
-				logger.Error(err, "Failed to update service status with floating IP")
-				return true, err
-			}
+
+		// Get the floating IP address
+		floatingIP, err := osClient.GetFloatingIPDetails(ctx, floatingIPID)
+		if err != nil {
+			return true, fmt.Errorf("failed to get floating IP details for %s: %w", floatingIPID, err)
+		}
+		floatingIPAddress = floatingIP.FloatingIP
+	} else {
+		// Create or find floating IP
+		needsRequeue, _, fipAddr, err := r.createOrFindFloatingIP(ctx, lb, svc, osClient, portID)
+		if needsRequeue || err != nil {
+			return needsRequeue, err
+		}
+		floatingIPAddress = fipAddr
+	}
+
+	// Update the service status with the floating IP address
+	if floatingIPAddress != "" {
+		if err := updateServiceExternalIPs(ctx, r.Client, svc, floatingIPAddress); err != nil {
+			logger.Error(err, "Failed to update service status with floating IP")
+			return true, err
 		}
 	}
 
 	return false, nil
+}
+
+// createOrFindFloatingIP creates a new floating IP or finds an existing one
+func (r *OpenStackLoadBalancerReconciler) createOrFindFloatingIP(
+	ctx context.Context,
+	lb *openstackv1alpha1.OpenStackLoadBalancer,
+	svc *corev1.Service,
+	osClient openstack.Client,
+	portID string,
+) (bool, string, string, error) {
+	logger := log.FromContext(ctx)
+
+	if lb.Spec.FloatingIPNetworkID == "" {
+		err := fmt.Errorf("floatingIPNetworkID must be specified when createFloatingIP is true")
+		logger.Error(err, "Missing floating IP network ID")
+		setCondition(lb, ConditionTypeFloatingIPCreated, metav1.ConditionFalse, "MissingFloatingIPNetwork", err.Error())
+		return true, "", "", err
+	}
+
+	// First, check if there's already a floating IP associated with this port in OpenStack
+	existingFIPID, existingFIPAddress, err := osClient.GetFloatingIPByPortID(ctx, portID)
+	if err != nil {
+		logger.Error(err, "Failed to check for existing floating IPs")
+		return true, "", "", err
+	}
+
+	if existingFIPID != "" {
+		// Found existing floating IP, use it
+		// Update the annotation on the service
+		if err := updateServiceAnnotationWithRetry(ctx, r.Client, svc, AnnotationFloatingIPID, existingFIPID); err != nil {
+			logger.Error(err, "Failed to update service with floating IP ID annotation")
+			return true, existingFIPID, existingFIPAddress, err
+		}
+
+		// Create an event for the service
+		r.Recorder.Eventf(svc, corev1.EventTypeNormal, "FloatingIPFound",
+			"Found existing OpenStack floating IP %s (%s) for service", existingFIPID, existingFIPAddress)
+
+		setCondition(lb, ConditionTypeFloatingIPCreated, metav1.ConditionTrue, "FloatingIPFound",
+			fmt.Sprintf("Found existing floating IP %s (%s) for port %s", existingFIPID, existingFIPAddress, portID))
+
+		return false, existingFIPID, existingFIPAddress, nil
+	}
+
+	// Create new floating IP
+	description := fmt.Sprintf("Floating IP for Kubernetes service %s/%s by OpenStack LB Operator",
+		svc.Namespace, svc.Name)
+
+	newFloatingIPID, newFloatingIPAddress, err := osClient.CreateFloatingIP(
+		ctx,
+		lb.Spec.FloatingIPNetworkID,
+		portID,
+		description,
+		svc.Namespace,
+		svc.Name,
+	)
+	if err != nil {
+		logger.Error(err, "Failed to create OpenStack floating IP")
+		setCondition(lb, ConditionTypeFloatingIPCreated, metav1.ConditionFalse, "FloatingIPCreationFailed", err.Error())
+		return true, "", "", err
+	}
+
+	// Update the annotation on the service
+	if err := updateServiceAnnotationWithRetry(ctx, r.Client, svc, AnnotationFloatingIPID, newFloatingIPID); err != nil {
+		logger.Error(err, "Failed to update service with floating IP ID annotation")
+		return true, newFloatingIPID, newFloatingIPAddress, err
+	}
+
+	// Create an event for the service
+	r.Recorder.Eventf(svc, corev1.EventTypeNormal, "FloatingIPCreated",
+		"Created OpenStack floating IP %s (%s) for service", newFloatingIPID, newFloatingIPAddress)
+
+	setCondition(lb, ConditionTypeFloatingIPCreated, metav1.ConditionTrue, "FloatingIPCreated",
+		fmt.Sprintf("Created floating IP %s (%s) for port %s", newFloatingIPID, newFloatingIPAddress, portID))
+
+	return false, newFloatingIPID, newFloatingIPAddress, nil
 }
 
 // handleDeletion handles the deletion of OpenStackLoadBalancer resources

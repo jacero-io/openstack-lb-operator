@@ -87,7 +87,7 @@ func NewClient(ctx context.Context, k8sClient client.Client, secretName, secretN
 // createHTTPTransport creates an HTTP transport with custom CA certificates if available
 func createHTTPTransport(ctx context.Context) (*http.Transport, error) {
 	logger := log.FromContext(ctx)
-	
+
 	// Check if custom CA certificates path is defined
 	caPath := os.Getenv("OPENSTACK_CA_CERT_PATH")
 	if caPath == "" {
@@ -96,7 +96,7 @@ func createHTTPTransport(ctx context.Context) (*http.Transport, error) {
 	}
 
 	logger.Info("Loading custom CA certificates", "path", caPath)
-	
+
 	// Load system certificates
 	rootCAs, err := x509.SystemCertPool()
 	if err != nil {
@@ -127,12 +127,12 @@ func createHTTPTransport(ctx context.Context) (*http.Transport, error) {
 
 			// Filter for typical certificate extensions and names
 			lowerName := strings.ToLower(d.Name())
-			if strings.HasSuffix(lowerName, ".crt") || 
-			   strings.HasSuffix(lowerName, ".pem") || 
-			   strings.HasSuffix(lowerName, ".cert") ||
-			   lowerName == "ca-certificates" ||
-			   lowerName == "ca-bundle" {
-				
+			if strings.HasSuffix(lowerName, ".crt") ||
+				strings.HasSuffix(lowerName, ".pem") ||
+				strings.HasSuffix(lowerName, ".cert") ||
+				lowerName == "ca-certificates" ||
+				lowerName == "ca-bundle" {
+
 				certs, err := os.ReadFile(path)
 				if err != nil {
 					logger.Error(err, "Failed to read certificate file", "path", path)

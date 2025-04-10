@@ -477,63 +477,63 @@ func (h *ResourceCleanupHandler) HandleServiceFinalizationWithForce(ctx context.
 
 // updateServiceExternalIPs updates the service's externalIPs field to include the floating IP
 func updateServiceExternalIPs(
-    ctx context.Context,
-    c client.Client,
-    svc *corev1.Service,
-    floatingIPAddress string,
+	ctx context.Context,
+	c client.Client,
+	svc *corev1.Service,
+	floatingIPAddress string,
 ) error {
-    logger := log.FromContext(ctx).WithValues(
-        "service", svc.Name,
-        "namespace", svc.Namespace,
-        "floatingIP", floatingIPAddress,
-    )
+	logger := log.FromContext(ctx).WithValues(
+		"service", svc.Name,
+		"namespace", svc.Namespace,
+		"floatingIP", floatingIPAddress,
+	)
 
-    return wait.ExponentialBackoff(RetryBackoff, func() (bool, error) {
-        // Get the latest version of the service
-        currentSvc := &corev1.Service{}
-        if err := c.Get(ctx, client.ObjectKey{Name: svc.Name, Namespace: svc.Namespace}, currentSvc); err != nil {
-            if apierrors.IsNotFound(err) {
-                // Service doesn't exist anymore, no need to update
-                return true, nil
-            }
-            // Other errors should be retried
-            logger.Error(err, "Failed to get service for externalIPs update, will retry")
-            return false, nil
-        }
+	return wait.ExponentialBackoff(RetryBackoff, func() (bool, error) {
+		// Get the latest version of the service
+		currentSvc := &corev1.Service{}
+		if err := c.Get(ctx, client.ObjectKey{Name: svc.Name, Namespace: svc.Namespace}, currentSvc); err != nil {
+			if apierrors.IsNotFound(err) {
+				// Service doesn't exist anymore, no need to update
+				return true, nil
+			}
+			// Other errors should be retried
+			logger.Error(err, "Failed to get service for externalIPs update, will retry")
+			return false, nil
+		}
 
-        // Create a copy to avoid modifying the cache
-        svcCopy := currentSvc.DeepCopy()
-        
-        // Check if IP is already in externalIPs
-        ipExists := false
-        for _, ip := range svcCopy.Spec.ExternalIPs {
-            if ip == floatingIPAddress {
-                ipExists = true
-                break
-            }
-        }
+		// Create a copy to avoid modifying the cache
+		svcCopy := currentSvc.DeepCopy()
 
-        // If IP doesn't exist in the list, add it
-        if !ipExists {
-            svcCopy.Spec.ExternalIPs = append(svcCopy.Spec.ExternalIPs, floatingIPAddress)
-            
-            // Update the service
-            if err := c.Update(ctx, svcCopy); err != nil {
-                if apierrors.IsConflict(err) {
-                    // Conflict error means someone else modified the object
-                    // We'll retry with the latest version
-                    logger.V(1).Info("Conflict updating service externalIPs, will retry")
-                    return false, nil
-                }
-                // Other errors should be returned
-                return false, err
-            }
-            
-            logger.Info("Successfully added floating IP to service externalIPs")
-        } else {
-            logger.V(1).Info("Floating IP already exists in service externalIPs")
-        }
-        
-        return true, nil
-    })
+		// Check if IP is already in externalIPs
+		ipExists := false
+		for _, ip := range svcCopy.Spec.ExternalIPs {
+			if ip == floatingIPAddress {
+				ipExists = true
+				break
+			}
+		}
+
+		// If IP doesn't exist in the list, add it
+		if !ipExists {
+			svcCopy.Spec.ExternalIPs = append(svcCopy.Spec.ExternalIPs, floatingIPAddress)
+
+			// Update the service
+			if err := c.Update(ctx, svcCopy); err != nil {
+				if apierrors.IsConflict(err) {
+					// Conflict error means someone else modified the object
+					// We'll retry with the latest version
+					logger.V(1).Info("Conflict updating service externalIPs, will retry")
+					return false, nil
+				}
+				// Other errors should be returned
+				return false, err
+			}
+
+			logger.Info("Successfully added floating IP to service externalIPs")
+		} else {
+			logger.V(1).Info("Floating IP already exists in service externalIPs")
+		}
+
+		return true, nil
+	})
 }
