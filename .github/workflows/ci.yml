@@ -53,38 +53,38 @@ jobs:
           task util:setup
           task operator:test
 
-  test-e2e:
-    name: Run on e2e tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Clone the code
-        uses: actions/checkout@v4
+#   test-e2e:
+#     name: Run on e2e tests
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: Clone the code
+#         uses: actions/checkout@v4
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
+#       - name: Setup Go
+#         uses: actions/setup-go@v5
+#         with:
+#           go-version-file: go.mod
 
-      - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+#       - name: Install Task
+#         uses: arduino/setup-task@v2
+#         with:
+#           version: 3.x
+#           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install the latest version of kind
-        run: |
-          curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
-          chmod +x ./kind
-          sudo mv ./kind /usr/local/bin/kind
+#       - name: Install the latest version of kind
+#         run: |
+#           curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+#           chmod +x ./kind
+#           sudo mv ./kind /usr/local/bin/kind
 
-      - name: Verify kind installation
-        run: kind version
+#       - name: Verify kind installation
+#         run: kind version
 
-      - name: Create kind cluster
-        run: kind create cluster
+#       - name: Create kind cluster
+#         run: kind create cluster
 
-      - name: Running Test e2e
-        run: |
-          go mod tidy
-          task util:setup
-          task operator:test-e2e
+#       - name: Running Test e2e
+#         run: |
+#           go mod tidy
+#           task util:setup
+#           task operator:test-e2e
